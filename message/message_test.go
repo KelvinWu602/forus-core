@@ -84,14 +84,94 @@ func TestConvertT1BytesToT2Struct(t *testing.T) {
 	t.Errorf("did not panic when deserialzing a t1 byte array into t2 message")
 }
 
-func TestT2MessageToBytes(t *testing.T) {
+func TestT1MessageToBytesWithCorrectSalt(t *testing.T) {
+	var t1Msg T1Message
+	t1Msg.Salt = 2
+	t1 := t1Msg.ToBytes()
+	if len(t1) != int(SIZE) {
+		t.Errorf("output length does not match package parameter 'SIZE', expect %v, actual %v", SIZE, len(t1))
+	}
+	if t1[SIZE-1] != 2 {
+		t.Errorf("output last byte != Salt, expect 2, actual %v", t1[SIZE-1])
+	}
+}
 
+func TestT2MessageToBytesWithCorrectSalt(t *testing.T) {
+	var t2Msg T2Message
+	t2Msg.JobID = 101
+	t2Msg.ProxyID = 202
+	t2Msg.Salt = 39
+	copy(t2Msg.Content[:4], []byte{1, 2, 3, 4})
+
+	t2 := t2Msg.ToBytes()
+
+	if len(t2) != int(SIZE) {
+		t.Errorf("output length does not match package parameter 'SIZE', expect %v, actual %v", SIZE, len(t2))
+	}
+
+	jobID := binary.BigEndian.Uint32(t2[0:4])
+	proxyID := binary.BigEndian.Uint32(t2[4:8])
+	salt := t2[SIZE-1]
+
+	if salt != 39 {
+		t.Errorf("last byte, expect: 39, actual %v", salt)
+	}
+
+	if jobID != 101 {
+		t.Errorf("byte 0-3, expect: 101, actual %v", jobID)
+	}
+
+	if proxyID != 202 {
+		t.Errorf("byte 4-8, expect: 202, actual %v", proxyID)
+	}
+
+	if reflect.DeepEqual(t2[8:12], []byte{1, 2, 3, 4}) == false {
+		t.Errorf("byte 8-12, expect: [1,2,3,4], actual %v", t2[8:12])
+	}
+}
+
+func TestT1MessageToBytesWithWrongSalt(t *testing.T) {
+	defer catch()
+
+	var t1Msg T1Message
+	t1Msg.Salt = 1
+	t1Msg.ToBytes()
+
+	// should never reach this statement
+	t.Errorf("did not panic when serializing a malformed t1 message")
+}
+
+func TestT2MessageToBytesWithWrongSalt(t *testing.T) {
+	defer catch()
+
+	var t2Msg T2Message
+	t2Msg.Salt = 2
+	t2Msg.ToBytes()
+
+	// should never reach this statement
+	t.Errorf("did not panic when serializing a malformed t2 message")
 }
 
 func TestT1MessageGetType(t *testing.T) {
+	t1 := [SIZE]byte{}
+	// Salt = 44
+	t1[SIZE-1] = 44
 
+	msgType := GetType(t1)
+
+	if msgType != T1 {
+		t.Errorf("GetType, expected: T1, actual: %v", msgType)
+	}
 }
 
 func TestT2MessageGetType(t *testing.T) {
+	t2 := [SIZE]byte{}
+	// Salt = 39
+	t2[SIZE-1] = 39
 
+	msgType := GetType(t2)
+
+	if msgType != T2 {
+		t.Errorf("GetType, expected: T2, actual: %v", msgType)
+	}
 }
