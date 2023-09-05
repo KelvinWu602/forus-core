@@ -14,7 +14,7 @@ func catch() {
 func TestConvertT1BytesToT1Struct(t *testing.T) {
 	t1 := [SIZE]byte{}
 	// Salt = 44
-	t1[SIZE-1] = 44
+	t1[0] = 44
 
 	var t1Msg T1Message
 	t1Msg.FromBytes(t1)
@@ -28,7 +28,7 @@ func TestConvertT2BytesToT1Struct(t *testing.T) {
 
 	t2 := [SIZE]byte{}
 	// Salt = 39
-	t2[SIZE-1] = 39
+	t2[0] = 39
 
 	var t1Msg T1Message
 	// should panic
@@ -41,13 +41,13 @@ func TestConvertT2BytesToT1Struct(t *testing.T) {
 func TestConvertT2BytesToT2Struct(t *testing.T) {
 	t2 := [SIZE]byte{}
 	// Salt = 39
-	t2[SIZE-1] = 39
+	t2[0] = 39
 	// JobID = 101
-	binary.BigEndian.PutUint32(t2[0:4], 101)
+	binary.BigEndian.PutUint32(t2[1:5], 101)
 	// proxyID = 202
-	binary.BigEndian.PutUint32(t2[4:8], 202)
+	binary.BigEndian.PutUint32(t2[5:9], 202)
 	// Content [0:4] = [1,2,3,4]
-	copy(t2[8:12], []byte{1, 2, 3, 4})
+	copy(t2[9:13], []byte{1, 2, 3, 4})
 
 	var t2Msg T2Message
 	t2Msg.FromBytes(t2)
@@ -65,7 +65,7 @@ func TestConvertT2BytesToT2Struct(t *testing.T) {
 	}
 
 	if reflect.DeepEqual(t2Msg.Content[:4], []byte{1, 2, 3, 4}) == false {
-		t.Errorf("t2Msg.Content, expect: [1,2,3,4], actual %v", t2Msg.Content[8:12])
+		t.Errorf("t2Msg.Content, expect: [1,2,3,4], actual %v", t2Msg.Content[9:13])
 	}
 }
 
@@ -74,7 +74,7 @@ func TestConvertT1BytesToT2Struct(t *testing.T) {
 
 	t1 := [SIZE]byte{}
 	// Salt = 44
-	t1[SIZE-1] = 44
+	t1[0] = 44
 
 	var t2Msg T2Message
 	// should panic
@@ -90,8 +90,8 @@ func TestT1MessageToBytes(t *testing.T) {
 	if len(t1) != int(SIZE) {
 		t.Errorf("output length does not match package parameter 'SIZE', expect %v, actual %v", SIZE, len(t1))
 	}
-	if t1[SIZE-1]&129 != 0 {
-		t.Errorf("output last byte != Salt, expect 0xxxxxx0, actual %v", t1[SIZE-1])
+	if t1[0]&129 != 0 {
+		t.Errorf("output first byte != Salt, expect 0xxxxxx0, actual %v", t1[SIZE-1])
 	}
 }
 
@@ -107,31 +107,31 @@ func TestT2MessageToBytes(t *testing.T) {
 		t.Errorf("output length does not match package parameter 'SIZE', expect %v, actual %v", SIZE, len(t2))
 	}
 
-	jobID := binary.BigEndian.Uint32(t2[0:4])
-	proxyID := binary.BigEndian.Uint32(t2[4:8])
-	salt := t2[SIZE-1]
+	salt := t2[0]
+	jobID := binary.BigEndian.Uint32(t2[1:5])
+	proxyID := binary.BigEndian.Uint32(t2[5:9])
 
 	if salt&129 != 1 {
 		t.Errorf("Salt, expect: 0xxxxxx1, actual %v", salt)
 	}
 
 	if jobID != 101 {
-		t.Errorf("byte 0-3, expect: 101, actual %v", jobID)
+		t.Errorf("byte 1-4, expect: 101, actual %v", jobID)
 	}
 
 	if proxyID != 202 {
-		t.Errorf("byte 4-8, expect: 202, actual %v", proxyID)
+		t.Errorf("byte 5-8, expect: 202, actual %v", proxyID)
 	}
 
-	if reflect.DeepEqual(t2[8:12], []byte{1, 2, 3, 4}) == false {
-		t.Errorf("byte 8-12, expect: [1,2,3,4], actual %v", t2[8:12])
+	if reflect.DeepEqual(t2[9:13], []byte{1, 2, 3, 4}) == false {
+		t.Errorf("byte 9-12, expect: [1,2,3,4], actual %v", t2[9:13])
 	}
 }
 
 func TestT1MessageGetType(t *testing.T) {
 	t1 := [SIZE]byte{}
 	// Salt = 44
-	t1[SIZE-1] = 44
+	t1[0] = 44
 
 	msgType := GetType(t1)
 
@@ -143,7 +143,7 @@ func TestT1MessageGetType(t *testing.T) {
 func TestT2MessageGetType(t *testing.T) {
 	t2 := [SIZE]byte{}
 	// Salt = 39
-	t2[SIZE-1] = 39
+	t2[0] = 39
 
 	msgType := GetType(t2)
 

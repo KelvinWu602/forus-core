@@ -8,10 +8,10 @@ import (
 	"math/big"
 )
 
-type MessageType uint8
+type InterNodeMessageType uint8
 
 const (
-	T1 MessageType = iota
+	T1 InterNodeMessageType = iota
 	T2
 )
 
@@ -48,10 +48,10 @@ type T2Message struct {
 func (t1 *T1Message) ToBytes() [SIZE]byte {
 	t1.salt = t1.generateSalt()
 	var output [SIZE]byte
-	if _, err := rand.Read(output[:SIZE-1]); err != nil {
+	if _, err := rand.Read(output[1:]); err != nil {
 		panic(err)
 	}
-	output[SIZE-1] = t1.salt
+	output[0] = t1.salt
 	return output
 }
 
@@ -59,30 +59,30 @@ func (t1 *T1Message) ToBytes() [SIZE]byte {
 func (t2 *T2Message) ToBytes() [SIZE]byte {
 	t2.salt = t2.generateSalt()
 	var output [SIZE]byte
-	binary.BigEndian.PutUint32(output[0:4], uint32(t2.JobID))
-	binary.BigEndian.PutUint32(output[4:8], uint32(t2.ProxyID))
-	copy(output[8:SIZE-2], t2.Content[:])
-	output[SIZE-1] = t2.salt
+	output[0] = t2.salt
+	binary.BigEndian.PutUint32(output[1:5], uint32(t2.JobID))
+	binary.BigEndian.PutUint32(output[5:9], uint32(t2.ProxyID))
+	copy(output[9:], t2.Content[:])
 	return output
 }
 
 // FromBytes reads a byte sequence ends with an even uint8 and retrieve the Salt.
 func (t1 *T1Message) FromBytes(data [SIZE]byte) {
-	if data[SIZE-1]&129 != 0 {
+	if data[0]&129 != 0 {
 		panic("Invalid salt!")
 	}
-	t1.salt = data[SIZE-1]
+	t1.salt = data[0]
 }
 
 // FromBytes reads a byte sequence ends with an odd uint8 and retrieve the jobID, proxyID, Salt and Content.
 func (t2 *T2Message) FromBytes(data [SIZE]byte) {
-	if data[SIZE-1]&129 != 1 {
+	if data[0]&129 != 1 {
 		panic("Invalid salt!")
 	}
-	t2.JobID = binary.BigEndian.Uint32(data[0:4])
-	t2.ProxyID = binary.BigEndian.Uint32(data[4:8])
-	copy(t2.Content[:], data[8:SIZE-1])
-	t2.salt = data[SIZE-1]
+	t2.salt = data[0]
+	t2.JobID = binary.BigEndian.Uint32(data[1:5])
+	t2.ProxyID = binary.BigEndian.Uint32(data[5:9])
+	copy(t2.Content[:], data[9:])
 }
 
 // generateBaseSalt generates a random uint8 with first bit = 0
@@ -105,11 +105,11 @@ func (t2 *T2Message) generateSalt() uint8 {
 	return salt | 1
 }
 
-// GetType identifies the MessageType represented by data, which can be T1 or T2
-func GetType(data [SIZE]byte) MessageType {
-	lastByte := data[SIZE-1]
-	if lastByte&128 > 0 {
+// GetType identifies the InterNodeMessageType represented by data, which can be T1 or T2
+func GetType(data [SIZE]byte) InterNodeMessageType {
+	salt := data[0]
+	if salt&128 > 0 {
 		panic("Not T1/T2 message!")
 	}
-	return MessageType(lastByte & 1)
+	return InterNodeMessageType(salt & 1)
 }
