@@ -18,8 +18,8 @@ func TestConvertT1BytesToT1Struct(t *testing.T) {
 
 	var t1Msg T1Message
 	t1Msg.FromBytes(t1)
-	if t1Msg.Salt != 44 {
-		t.Errorf("t1Msg.Salt, expect: 44, actual %v", t1Msg.Salt)
+	if t1Msg.salt != 44 {
+		t.Errorf("t1Msg.Salt, expect: 44, actual %v", t1Msg.salt)
 	}
 }
 
@@ -52,8 +52,8 @@ func TestConvertT2BytesToT2Struct(t *testing.T) {
 	var t2Msg T2Message
 	t2Msg.FromBytes(t2)
 
-	if t2Msg.Salt != 39 {
-		t.Errorf("t2Msg.Salt, expect: 39, actual %v", t2Msg.Salt)
+	if t2Msg.salt != 39 {
+		t.Errorf("t2Msg.Salt, expect: 39, actual %v", t2Msg.salt)
 	}
 
 	if t2Msg.JobID != 101 {
@@ -84,23 +84,21 @@ func TestConvertT1BytesToT2Struct(t *testing.T) {
 	t.Errorf("did not panic when deserialzing a t1 byte array into t2 message")
 }
 
-func TestT1MessageToBytesWithCorrectSalt(t *testing.T) {
+func TestT1MessageToBytes(t *testing.T) {
 	var t1Msg T1Message
-	t1Msg.Salt = 2
 	t1 := t1Msg.ToBytes()
 	if len(t1) != int(SIZE) {
 		t.Errorf("output length does not match package parameter 'SIZE', expect %v, actual %v", SIZE, len(t1))
 	}
-	if t1[SIZE-1] != 2 {
-		t.Errorf("output last byte != Salt, expect 2, actual %v", t1[SIZE-1])
+	if t1[SIZE-1]&129 != 0 {
+		t.Errorf("output last byte != Salt, expect 0xxxxxx0, actual %v", t1[SIZE-1])
 	}
 }
 
-func TestT2MessageToBytesWithCorrectSalt(t *testing.T) {
+func TestT2MessageToBytes(t *testing.T) {
 	var t2Msg T2Message
 	t2Msg.JobID = 101
 	t2Msg.ProxyID = 202
-	t2Msg.Salt = 39
 	copy(t2Msg.Content[:4], []byte{1, 2, 3, 4})
 
 	t2 := t2Msg.ToBytes()
@@ -113,8 +111,8 @@ func TestT2MessageToBytesWithCorrectSalt(t *testing.T) {
 	proxyID := binary.BigEndian.Uint32(t2[4:8])
 	salt := t2[SIZE-1]
 
-	if salt != 39 {
-		t.Errorf("last byte, expect: 39, actual %v", salt)
+	if salt&129 != 1 {
+		t.Errorf("Salt, expect: 0xxxxxx1, actual %v", salt)
 	}
 
 	if jobID != 101 {
@@ -128,28 +126,6 @@ func TestT2MessageToBytesWithCorrectSalt(t *testing.T) {
 	if reflect.DeepEqual(t2[8:12], []byte{1, 2, 3, 4}) == false {
 		t.Errorf("byte 8-12, expect: [1,2,3,4], actual %v", t2[8:12])
 	}
-}
-
-func TestT1MessageToBytesWithWrongSalt(t *testing.T) {
-	defer catch()
-
-	var t1Msg T1Message
-	t1Msg.Salt = 1
-	t1Msg.ToBytes()
-
-	// should never reach this statement
-	t.Errorf("did not panic when serializing a malformed t1 message")
-}
-
-func TestT2MessageToBytesWithWrongSalt(t *testing.T) {
-	defer catch()
-
-	var t2Msg T2Message
-	t2Msg.Salt = 2
-	t2Msg.ToBytes()
-
-	// should never reach this statement
-	t.Errorf("did not panic when serializing a malformed t2 message")
 }
 
 func TestT1MessageGetType(t *testing.T) {
