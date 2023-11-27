@@ -2,7 +2,9 @@ package helpers
 
 import (
 	"crypto/aes"
+	"crypto/cipher"
 	"encoding/hex"
+	"fmt"
 	"math/rand"
 	"time"
 )
@@ -26,6 +28,13 @@ var seededRand *rand.Rand = rand.New(rand.NewSource(time.Now().UnixNano()))
 
 type SecretKey []byte
 
+func PKCS5UnPadding(src []byte) []byte {
+	length := len(src)
+	unpadding := int(src[length-1])
+
+	return src[:(length - unpadding)]
+}
+
 func generateSecretKey(length int, charset string) SecretKey {
 	b := make([]byte, length)
 	for i := range b {
@@ -35,6 +44,7 @@ func generateSecretKey(length int, charset string) SecretKey {
 }
 
 func encryptAES(key SecretKey, plaintext string) (string, error) {
+	// iv := "my16digitIvKey12"
 	cipher, err := aes.NewCipher(key)
 	if err != nil {
 		return "", err
@@ -46,16 +56,19 @@ func encryptAES(key SecretKey, plaintext string) (string, error) {
 
 }
 
-func decryptAES(key SecretKey, ct string) (string, error) {
-	ciphertext, _ := hex.DecodeString(ct)
-
-	cipher, err := aes.NewCipher(key)
+func decryptAES(key SecretKey, ciphertext []byte) ([]byte, error) {
+	iv := "my16digitIvKey12"
+	block, err := aes.NewCipher(key)
 	if err != nil {
-		return "", err
+		return []byte("Error when creating NewCipher"), err
 	}
-	output := make(SecretKey, len(ciphertext))
-	cipher.Decrypt(output, ciphertext)
-	return string(output[:]), nil
+	if len(ciphertext)%aes.BlockSize != 0 {
+		return []byte("Blocksize Zero Error"), fmt.Errorf("Blocksize Zero Error")
+	}
+	mode := cipher.NewCBCDecrypter(block, []byte(iv))
+	mode.CryptBlocks(ciphertext, ciphertext)
+	ciphertext = PKCS5UnPadding(ciphertext)
+	return ciphertext, nil
 
 }
 

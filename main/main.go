@@ -1,9 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"container/list"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/rsa"
+	"encoding/gob"
 	"fmt"
 	"log"
 	"net"
@@ -14,6 +18,7 @@ import (
 	"time"
 
 	"github.com/KelvinWu602/forus-core/helpers"
+	"github.com/google/uuid"
 
 	// isServer "github.com/KelvinWu602/immutable-storage"
 	ndServer "github.com/KelvinWu602/node-discovery/protos"
@@ -22,25 +27,59 @@ import (
 )
 
 // alias
-type PrivateKey rsa.PrivateKey
-type PublicKey rsa.PublicKey
 type SecretKey helpers.SecretKey
 type KeyExchange helpers.KeyExchange
-type UUID helpers.UUID
 type Time time.Time
 type PathProfile helpers.PathProfile
 type CoverNodeProfile helpers.CoverNodeProfile
+type QueryPathResp helpers.QueryPathResp
+type QueryPathReq helpers.QueryPathReq
+type VerifyCoverReq helpers.VerifyCoverReq
+type VerifyCoverResp helpers.VerifyCoverResp
 
 const (
-	MINCOVER     = 10
-	GEN_KEY_SIZE = 4096
+	MINCOVER       = 10
+	GEN_KEY_SIZE   = 4096
+	CM_HEADER_SIZE = 16
 )
 
-// The piece of data to be sent in Forus
-type Message struct {
-	ID      uint64 `json:"id"`      // 16 bytes
-	Payload string `json:"payload"` // 944 bytes max
+func PKCS5UnPadding(src []byte) []byte {
+	length := len(src)
+	unpadding := int(src[length-1])
+
+	return src[:(length - unpadding)]
 }
+
+func decryptAES(key SecretKey, ciphertext []byte) ([]byte, error) {
+	iv := "my16digitIvKey12"
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return []byte("Error when creating NewCipher"), err
+	}
+	if len(ciphertext)%aes.BlockSize != 0 {
+		return []byte("Blocksize Zero Error"), fmt.Errorf("Blocksize Zero Error")
+	}
+	mode := cipher.NewCBCDecrypter(block, []byte(iv))
+	mode.CryptBlocks(ciphertext, ciphertext)
+	ciphertext = PKCS5UnPadding(ciphertext)
+	return ciphertext, nil
+
+}
+
+// The real/cover message
+// It is sent via TCP and should have a maximum size of
+// 1) 1024 bytes before encryption
+// 2) 1460 bytes after encryption
+type Message struct {
+	ID          uint64 // 16 bytes
+	Checksum    uint64 // 32 bytes
+	Salt        uint64 // 32 bytes of salt
+	ControlType string // 1 byte of message type
+	Payload     string // 943 bytes max
+}
+
+// The internal control message
+// control message has header of 16 byte
 
 // A post or comment in Forus
 type Record struct {
@@ -55,18 +94,59 @@ type Record struct {
 }
 
 type Node struct {
+	OwnIP      net.IP
 	Paths      []PathProfile
 	Covers     []CoverNodeProfile
-	PublicKey  PublicKey
-	PrivateKey PrivateKey
+	PublicKey  rsa.PublicKey
+	PrivateKey rsa.PrivateKey
 }
 
 // if the incoming message asks pathProfile of this
-func handleGetPath(conn net.Conn) {
+func handleGetPath(node *Node, conn net.Conn, buf []byte) {
+	// TODO
+	// 1) store the public key somewhere
+	// 2) send a response
+	resp := QueryPathResp{
+		NodePublicKey:  node.PublicKey,
+		TreeUUID:       node.Paths[0].Uuid,
+		NextHop:        node.Paths[0].Next,
+		NextNextHop:    node.Paths[0].Next2,
+		ProxyPublicKey: node.Paths[0].ProxyPublic,
+	}
+
+	resp_buf := new(bytes.Buffer)
+	respGobObj := gob.NewEncoder(resp_buf)
+	respGobObj.Encode(resp)
+	conn.Write(resp_buf.Bytes())
 }
 
-func handleVerifyCover(conn net.Conn) {
+func handleVerifyCover(node *Node, conn net.Conn, buf []byte) {
+	// TODO
+	// 1) decode the buf in VerifyCoverReq
+	// 2) If success, check if the IP is the same
+	// 	If the IP is the same, return resp with true
+	// 	If the IP is not the same, return resp with false
+	// 3) If failed, TBC
 
+	req_buf := bytes.NewBuffer(buf)
+	req_struct := new(net.IP)
+	gobobj := gob.NewDecoder(req_buf)
+	err := gobobj.Decode(req_struct)
+	if err != nil {
+		log.Fatalf("cannot decode buf for verifyCoverReq")
+	}
+
+	var resp VerifyCoverResp
+	if node.OwnIP.Equal(*req_struct) {
+		resp = VerifyCoverResp{IsVerified: true}
+	} else {
+		resp = VerifyCoverResp{IsVerified: false}
+	}
+
+	resp_buf := new(bytes.Buffer)
+	respGobObj := gob.NewEncoder(resp_buf)
+	respGobObj.Encode(resp)
+	conn.Write(resp_buf.Bytes())
 }
 
 // if the incoming message ask to join the existing path of this
@@ -87,31 +167,36 @@ func handleForward(conn net.Conn) {
 
 }
 
-func handleRequest(conn net.Conn) {
+func handleRequest(node *Node, conn net.Conn) {
 	// Make a buffer to hold incoming data.
-	buf := make([]byte, 1024)
+	// The incoming data is encrypted = 1460 bytes
+	buf := make([]byte, 1460)
 	// Read the incoming connection into the buffer.
-	reqLen, err := conn.Read(buf)
+	encrypted_mss, err := conn.Read(buf)
 	if err != nil {
 		fmt.Println("Error reading:", err.Error())
+		fmt.Println("MSS: ", encrypted_mss)
 	}
 
-	// read from buffer about the message
+	// read from buffer about the message in []byte
 	// find the message type
-	// TODO: need some sort of parser
+	// TODO: need some sort of decoder
+	// either real/cover message
+	// or control message
+
 	// execute different handler
-	switch messageType := string(buf[reqLen]); messageType {
-	case "a":
-		handleGetPath(conn)
-	case "b":
-		handleVerifyCover(conn)
-	case "c":
+	switch messageType := string(buf[:CM_HEADER_SIZE]); messageType {
+	case "aaaaaaaaaaaaaaaa":
+		handleGetPath(node, conn, buf[CM_HEADER_SIZE:])
+	case "bbbbbbbbbbbbbbbb":
+		handleVerifyCover(node, conn, buf[CM_HEADER_SIZE:])
+	case "cccccccccccccccc":
 		handleConnectPath(conn)
-	case "d":
+	case "dddddddddddddddd":
 		handleCreateProxy(conn)
-	case "e":
+	case "eeeeeeeeeeeeeeee":
 		handleDeleteCover(conn)
-	case "f":
+	case "ffffffffffffffff":
 		handleForward(conn)
 	default:
 		fmt.Println("Cannot recognise this message")
@@ -157,16 +242,6 @@ func (node *Node) New(configFile string) error {
 		// maybe try after 30 second?
 		os.Exit(1)
 	}
-	/*
-		r_is, err := c_is.AvailableIDs()
-		if err != nil {
-			log.Fatalf("Response from Immutable Storage is not found")
-			fmt.Println("Cannot get response from IS")
-			os.Exit(1)
-			// need some handling
-			// maybe try after 30 second?
-		}
-	*/
 
 	// 2) join at least one path
 
@@ -195,12 +270,12 @@ func (node *Node) New(configFile string) error {
 			os.Exit(1)
 		}
 		// if a connection is accepted, (4)
-		go handleRequest(conn)
+		go handleRequest(node, conn)
 	}
 }
 
 // TODO
-func (node *Node) Publish(key PrivateKey, message []byte) error {
+func (node *Node) Publish(key rsa.PrivateKey, message []byte) error {
 	// 1) check for the following condition: connect to at least 1 path AND has k cover nodes
 	if len(node.Paths) < 1 && len(node.Covers) >= MINCOVER {
 		fmt.Println("Condition of Publish not met.")
@@ -212,7 +287,7 @@ func (node *Node) Publish(key PrivateKey, message []byte) error {
 
 	return nil
 }
-func (node Node) Read(key PrivateKey) ([]byte, error) {
+func (node Node) Read(key rsa.PrivateKey) ([]byte, error) {
 	return nil, nil
 }
 func (node Node) GetPaths() []PathProfile {
@@ -229,7 +304,7 @@ func (node Node) VerifyCover(ip string) bool {
 func (node Node) AddProxyRole() (bool, error) {
 	return false, nil
 }
-func (node Node) AddCover(coverIP string, treeUUID UUID, secret SecretKey) bool {
+func (node Node) AddCover(coverIP string, treeUUID uuid.UUID, secret SecretKey) bool {
 	return false
 }
 func (node Node) DeleteCover(coverIP string) error {
@@ -293,14 +368,16 @@ func postMessage(c *gin.Context) {
 // 2) start a server at port 3000 and serve 4 API endpoints
 // POST join-cluster, leave-cluster, messagee; GET message
 func main() {
-	/*
-		self := Node{
-			Paths:      nil,
-			Cover:      nil,
-			PublicKey:  nil,
-			PrivateKey: nil,
-		}
-	*/
+
+	self := Node{
+		Paths:      nil,
+		Covers:     nil,
+		PublicKey:  rsa.PublicKey{},
+		PrivateKey: rsa.PrivateKey{},
+	}
+	// just to get rid of error
+	fmt.Println(self)
+
 	// start server
 	router := gin.Default()
 	router.GET("/message:id", getMessage)
