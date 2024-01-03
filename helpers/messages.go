@@ -1,15 +1,17 @@
 package helpers
 
 import (
-	"crypto/rsa"
+	"crypto/ecdsa"
 	"net"
 
 	"github.com/google/uuid"
 )
 
+// every message starts with a control type to indicate what kind of handshake message they are
+
 type QueryPathReq struct {
 	ControlType       [16]byte // in string = 16 * a
-	IncomingPublicKey rsa.PublicKey
+	IncomingPublicKey ecdsa.PublicKey
 }
 type QueryPathResp struct {
 	// return
@@ -18,11 +20,11 @@ type QueryPathResp struct {
 	// 3) IP address of next hop
 	// 4) IP address of next-next-hop
 	// 5) proxy's public key
-	NodePublicKey  rsa.PublicKey
+	NodePublicKey  ecdsa.PublicKey
 	TreeUUID       uuid.UUID
 	NextHop        net.IP
 	NextNextHop    net.IP
-	ProxyPublicKey rsa.PublicKey
+	ProxyPublicKey ecdsa.PublicKey
 }
 
 type VerifyCoverReq struct {
@@ -37,9 +39,11 @@ type VerifyCoverResp struct {
 type ConnectPathReq struct {
 	ControlType [16]byte
 	TreeUUID    uuid.UUID
+	ReqPublic   ecdsa.PublicKey
 }
 
 type ConnectPathResp struct {
+	RespPublic ecdsa.PublicKey
 }
 
 type CreateProxyReq struct {
