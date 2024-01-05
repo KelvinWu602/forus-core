@@ -77,9 +77,6 @@ type Message struct {
 	Payload     string // 943 bytes max
 }
 
-// The internal control message
-// control message has header of 16 byte
-
 // A post or comment in Forus
 type Record struct {
 	Id        uint64 // unique within all posts and comments
@@ -220,7 +217,6 @@ func handleForward(conn net.Conn) {
 
 }
 
-// FUNC: act as a
 func handleRequest(node *Node, conn net.Conn) {
 
 	// Make a buffer to hold incoming data.

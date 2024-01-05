@@ -3,9 +3,6 @@ package p2p
 import (
 	"log"
 	"net"
-	"sync"
-
-	"github.com/KelvinWu602/forus-core/p2p"
 )
 
 // TCPNode represents the remote node over a TCP connection
@@ -29,6 +26,10 @@ func NewTCPPeer(conn net.Conn, outbound bool) *TCPPeer {
 
 }
 
+func (p *TCPPeer) Close() error {
+	return p.conn.Close()
+}
+
 type TCPTransportConfig struct {
 }
 
@@ -40,16 +41,24 @@ type TCPTransport struct {
 	config TCPTransportConfig
 	// decoder is to identify which control message it is
 	decoder Decoder
-
-	mu    sync.RWMutex
-	peers map[net.Addr]Peer
 }
 
 func NewTCPTransport(listenAddr string) *TCPTransport {
 	return &TCPTransport{
 		listenAddress: listenAddr,
-		decoder:       p2p.GOBDecoder{},
+		decoder:       GOBDecoder{},
 	}
+}
+
+func (t *TCPTransport) Dial(addr string) error {
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		return err
+	}
+
+	go t.handleConn(conn, true)
+
+	return nil
 }
 
 func (t *TCPTransport) ListenAndAccept() error {
@@ -77,13 +86,13 @@ func (t *TCPTransport) acceptLoop() {
 			continue
 		}
 
-		go t.handleConn(conn)
+		go t.handleConn(conn, false)
 	}
 }
 
-func (t *TCPTransport) handleConn(conn net.Conn) {
+func (t *TCPTransport) handleConn(conn net.Conn, outbound bool) {
 
-	peer := NewTCPPeer(conn, true)
+	peer := NewTCPPeer(conn, outbound)
 	log.Printf("new incoming conection %+v \n ", peer)
 
 	// Make a buffer to hold incoming data.
@@ -93,15 +102,17 @@ func (t *TCPTransport) handleConn(conn net.Conn) {
 	// Read the incoming message into the buffer
 	// A loop for continuous reading
 	for {
-		if err := t.decoder.Decode(conn, "a"); err != nil {
-			// if failed to decode control message
-			log.Fatalf(("message cannot be decoded \n"))
-			continue
-		}
 		mss_length, err := conn.Read(buf)
 		if err != nil {
 			log.Fatalf("error reading message with length %d: %s \n", mss_length, err)
 		}
+
+		if err := t.decoder.Decode(conn, buf[:mss_length]); err != nil {
+			// if failed to decode control message
+			log.Fatalf(("message cannot be decoded \n"))
+			continue
+		}
+
 	}
 
 }
