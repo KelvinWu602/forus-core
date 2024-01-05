@@ -2,33 +2,25 @@ package main
 
 import (
 	"bytes"
-	"container/list"
-	"context"
+
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/rsa"
 	"encoding/gob"
 	"fmt"
 	"log"
 	"net"
-	"net/http"
 	"os"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/KelvinWu602/forus-core/helpers"
 	"github.com/google/uuid"
-
-	// isServer "github.com/KelvinWu602/immutable-storage"
-	ndServer "github.com/KelvinWu602/node-discovery/protos"
-	"github.com/gin-gonic/gin"
-	"google.golang.org/grpc"
 )
 
 // alias
-type SecretKey helpers.SecretKey
-type KeyExchange helpers.KeyExchange
 type Time time.Time
 type PathProfile helpers.PathProfile
 type CoverNodeProfile helpers.CoverNodeProfile
@@ -36,12 +28,19 @@ type QueryPathResp helpers.QueryPathResp
 type QueryPathReq helpers.QueryPathReq
 type VerifyCoverReq helpers.VerifyCoverReq
 type VerifyCoverResp helpers.VerifyCoverResp
+type ConnectPathReq helpers.ConnectPathReq
+type ConnectPathResp helpers.ConnectPathResp
 
 const (
 	MINCOVER       = 10
 	GEN_KEY_SIZE   = 4096
 	CM_HEADER_SIZE = 16
 )
+
+func ErrorHandler(err error) {
+	log.Fatalln(err)
+	os.Exit(1)
+}
 
 func PKCS5UnPadding(src []byte) []byte {
 	length := len(src)
@@ -50,7 +49,7 @@ func PKCS5UnPadding(src []byte) []byte {
 	return src[:(length - unpadding)]
 }
 
-func decryptAES(key SecretKey, ciphertext []byte) ([]byte, error) {
+func decryptAES(key []byte, ciphertext []byte) ([]byte, error) {
 	iv := "my16digitIvKey12"
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -97,27 +96,56 @@ type Node struct {
 	OwnIP      net.IP
 	Paths      []PathProfile
 	Covers     []CoverNodeProfile
-	PublicKey  rsa.PublicKey
-	PrivateKey rsa.PrivateKey
+	PublicKey  ecdsa.PublicKey
+	PrivateKey ecdsa.PrivateKey
 }
 
-// if the incoming message asks pathProfile of this
+// SERVER: query path
 func handleGetPath(node *Node, conn net.Conn, buf []byte) {
 	// TODO
 	// 1) store the public key somewhere
 	// 2) send a response
+	log.Println("GetPath handler triggered")
+	var controlType [16]byte
+	copy(controlType[:], "aaaaaaaaaaaaaaab")
 	resp := QueryPathResp{
+		ControlType:    controlType,
 		NodePublicKey:  node.PublicKey,
 		TreeUUID:       node.Paths[0].Uuid,
 		NextHop:        node.Paths[0].Next,
 		NextNextHop:    node.Paths[0].Next2,
 		ProxyPublicKey: node.Paths[0].ProxyPublic,
 	}
+	log.Println("QueryPathResp body: ")
+	log.Printf("ControlType: %s \n", controlType)
+	log.Printf("NodePublicKey: %s \n", node.PublicKey)
+	log.Printf("TreeUUID: %s \n", node.Paths[0].Uuid)
+	log.Printf("NextHop: %s \n", node.Paths[0].Next)
+	log.Printf("NextNextHop: %s \n", node.Paths[0].Next2)
+	log.Printf("ProxyPublicKey: %s \n", node.Paths[0].ProxyPublic)
 
 	resp_buf := new(bytes.Buffer)
 	respGobObj := gob.NewEncoder(resp_buf)
 	respGobObj.Encode(resp)
 	conn.Write(resp_buf.Bytes())
+}
+
+func handleQueryPathN3(node *Node, conn net.Conn, buf []byte) {
+	req_buf := bytes.NewBuffer(buf)
+	req_struct := new(QueryPathResp)
+	gobobj := gob.NewDecoder(req_buf)
+	err := gobobj.Decode(req_struct)
+	if err != nil {
+		log.Fatalf("cannot decode buf for Query Path N3")
+	}
+	log.Println("QueryPathResp received: ")
+	log.Printf("ControlType: %s \n", req_struct.ControlType)
+	log.Printf("NodePublicKey: %s \n", req_struct.NodePublicKey)
+	log.Printf("TreeUUID: %s \n", req_struct.TreeUUID)
+	log.Printf("NextHop: %s \n", req_struct.NextHop)
+	log.Printf("NextNextHop: %s \n", req_struct.NextNextHop)
+	log.Printf("ProxyPublicKey: %s \n", req_struct.ProxyPublicKey)
+
 }
 
 func handleVerifyCover(node *Node, conn net.Conn, buf []byte) {
@@ -149,8 +177,33 @@ func handleVerifyCover(node *Node, conn net.Conn, buf []byte) {
 	conn.Write(resp_buf.Bytes())
 }
 
+// CLIENT: query path
+
 // if the incoming message ask to join the existing path of this
-func handleConnectPath(conn net.Conn) {
+func handleConnectPath(node *Node, conn net.Conn, buf []byte) {
+	// TODO
+	// 1) obtain treeUUID and public key from req
+	//		public key and own private key -> sha256 SUM256 = secret key
+	req_buf := bytes.NewBuffer(buf)
+	req_struct := new(ConnectPathReq)
+	gobobj := gob.NewDecoder(req_buf)
+	err := gobobj.Decode(req_struct)
+	if err != nil {
+		log.Fatalf("cannot decode buf for verifyCoverReq")
+	}
+	/*
+		treeUUID := req_struct.TreeUUID
+		OnePublic := req_struct.ReqPublic
+	*/
+
+	// 2) send resp with own public	 key
+	resp := ConnectPathResp{RespPublic: node.PublicKey}
+	resp_buf := new(bytes.Buffer)
+	respGobObj := gob.NewEncoder(resp_buf)
+	respGobObj.Encode(resp)
+	conn.Write(resp_buf.Bytes())
+	// 3) wait for ack
+	// 4) periodically send out cover messages
 
 }
 
@@ -167,7 +220,9 @@ func handleForward(conn net.Conn) {
 
 }
 
+// FUNC: act as a
 func handleRequest(node *Node, conn net.Conn) {
+
 	// Make a buffer to hold incoming data.
 	// The incoming data is encrypted = 1460 bytes
 	buf := make([]byte, 1460)
@@ -188,10 +243,12 @@ func handleRequest(node *Node, conn net.Conn) {
 	switch messageType := string(buf[:CM_HEADER_SIZE]); messageType {
 	case "aaaaaaaaaaaaaaaa":
 		handleGetPath(node, conn, buf[CM_HEADER_SIZE:])
+	case "aaaaaaaaaaaaaaab":
+		handleQueryPathN3(node, conn, buf[:])
 	case "bbbbbbbbbbbbbbbb":
 		handleVerifyCover(node, conn, buf[CM_HEADER_SIZE:])
 	case "cccccccccccccccc":
-		handleConnectPath(conn)
+		handleConnectPath(node, conn, buf[:1460])
 	case "dddddddddddddddd":
 		handleCreateProxy(conn)
 	case "eeeeeeeeeeeeeeee":
@@ -207,71 +264,52 @@ func handleRequest(node *Node, conn net.Conn) {
 // TODO: load the configuration file given a string
 // PROBLEM: when to close the connection
 func (node *Node) New(configFile string) error {
-	// 1) check the status of IS and ND module
-	// ND endpoint at port 3200: GetMembers
-	// IS endpoint at port 3100: AvailableIDs
-	var connND *grpc.ClientConn
-	var connIS *grpc.ClientConn
-	connND, errND := grpc.Dial("localhost:3200")
-	if errND != nil {
-		log.Fatalf("Could not connect to Node Discovery")
-	}
-	connIS, errIS := grpc.Dial("localhost:3100")
-	if errIS != nil {
-		log.Fatalf("Could not connect to Immutable Storage")
-	}
 
-	defer connND.Close()
-	defer connIS.Close()
-
-	c_nd := ndServer.NewNodeDiscoveryClient(connND)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	// c_is := isServer.NewImmutableStorageClient()
-	getMemberBody := ndServer.GetMembersRequest{}
-	r_nd, err := c_nd.GetMembers(ctx, &getMemberBody)
-	if err != nil {
-		log.Fatalf("Response from Node Discovery is not found")
-		fmt.Println("Cannot get response from ND")
-		os.Exit(1)
-		// need some handling
-		// maybe try after 30 second?
-	}
-	if r_nd == nil {
-		// need some handling
-		// maybe try after 30 second?
-		os.Exit(1)
-	}
-
-	// 2) join at least one path
+	// NEXT STAGE: 1) check the status of IS and ND module
+	// NEXT STAGE: 2) join at least one path
 
 	// 3) start server that listens on 3001 (3001 is for other nodes in the same network)
 	// 4) whenever there is a new connection in at 3001, start a new routinue
 	// 5) 5 handlers in the routine: defined in handleRequest()
+	PORT := os.Args[1]
 	const (
 		HOST = "localhost"
-		PORT = "3001"
 		TYPE = "tcp"
 	)
-	listen, err := net.Listen(TYPE, HOST+":"+PORT)
-	if err != nil {
-		log.Fatal(err)
-		fmt.Println("Fail to listen to:", err.Error())
-		os.Exit(1)
-	}
-	defer listen.Close()
-
-	// continuely listens for connection
-	for {
-		conn, err := listen.Accept()
+	if PORT == "3001" {
+		listen, err := net.Listen(TYPE, HOST+":"+PORT)
 		if err != nil {
 			log.Fatal(err)
-			fmt.Println("Error connecting:", err.Error())
+			log.Println("Fail to listen to:", err.Error())
 			os.Exit(1)
 		}
-		// if a connection is accepted, (4)
-		go handleRequest(node, conn)
+		defer listen.Close()
+		log.Printf("Server is successfully created at port %s \n", PORT)
+
+		for {
+			conn, err := listen.Accept()
+			if err != nil {
+				log.Fatal(err)
+				fmt.Println("Error connecting:", err.Error())
+				os.Exit(1)
+			}
+			log.Printf("Connection is successfully accepted \n")
+			// if a connection is accepted, (4)
+			go handleRequest(node, conn)
+		}
 	}
+
+	if PORT == "3002" {
+		conn, err := net.Dial("tcp", "localhost:3001")
+		ErrorHandler(err)
+		log.Printf("Connection is being accepted successfully \n")
+		_, err = conn.Write([]byte("aaaaaaaaaaaaaaaa"))
+		ErrorHandler(err)
+		go handleRequest(node, conn)
+		conn.Close()
+	}
+
+	return nil
 }
 
 // TODO
@@ -293,9 +331,9 @@ func (node Node) Read(key rsa.PrivateKey) ([]byte, error) {
 func (node Node) GetPaths() []PathProfile {
 	return nil
 }
-func (node Node) VerifyCover(ip string) bool {
+func (node Node) VerifyCover(ip net.IP) bool {
 	for i := 0; i < len(node.Covers); i++ {
-		if ip == node.Covers[i].Cover {
+		if ip.Equal(node.Covers[i].Cover) {
 			return true
 		}
 	}
@@ -304,7 +342,7 @@ func (node Node) VerifyCover(ip string) bool {
 func (node Node) AddProxyRole() (bool, error) {
 	return false, nil
 }
-func (node Node) AddCover(coverIP string, treeUUID uuid.UUID, secret SecretKey) bool {
+func (node Node) AddCover(coverIP string, treeUUID uuid.UUID, secret []byte) bool {
 	return false
 }
 func (node Node) DeleteCover(coverIP string) error {
@@ -316,52 +354,10 @@ func (node Node) Forward(key rsa.PrivateKey, message []byte) error {
 
 /*
 *****************************************************
-// API endpoints to be accessed by the front-end
+// TODO: API endpoints to be accessed by the front-end
+// NEXT-STAGE
 *****************************************************
 */
-
-func keyByID(id uint64) (*Message, error) {
-	// pull the message by id from the IPFS
-	return nil, nil
-}
-
-func getMessage(c *gin.Context) {
-	// id := c.Param("id") // will be fetched as a path parameter
-	id, queryErr := c.GetQuery("id")
-	arrayId := strings.Split(id, ",")
-	if !queryErr {
-		c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "Wrong format in Query"})
-		return
-	}
-
-	keys := list.New()
-	for _, id := range arrayId {
-		idVal, _ := strconv.Atoi(id)
-		message, err := keyByID(uint64(idVal))
-
-		if err != nil {
-			c.IndentedJSON(http.StatusNotFound, gin.H{"message": "Message not found"})
-			continue
-		}
-		keys.PushBack(message)
-	}
-
-	// return messages
-	c.IndentedJSON(http.StatusOK, keys)
-}
-
-// post message for frontend
-func postMessage(c *gin.Context) {
-
-	var newMessage Message
-	if err := c.BindJSON(&newMessage); err != nil {
-		return
-	}
-
-	// can write the the new message in some ways
-
-	c.IndentedJSON(http.StatusCreated, newMessage)
-}
 
 // TODO:
 // 1) instantiate a new node
@@ -369,19 +365,39 @@ func postMessage(c *gin.Context) {
 // POST join-cluster, leave-cluster, messagee; GET message
 func main() {
 
-	self := Node{
-		Paths:      nil,
-		Covers:     nil,
-		PublicKey:  rsa.PublicKey{},
-		PrivateKey: rsa.PrivateKey{},
+	logfile, err := os.Create("app.log")
+	if err != nil {
+		fmt.Println("Cannot create logfile")
 	}
-	// just to get rid of error
-	fmt.Println(self)
 
-	// start server
-	router := gin.Default()
-	router.GET("/message:id", getMessage)
-	router.POST("/message", postMessage)
-	router.Run("localhost:3000")
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		log.Fatalf("generation private key failed")
+	}
 
+	self := Node{
+		Paths: []PathProfile{
+			{
+				Uuid:        uuid.New(),
+				Next:        net.IPv4(1, 1, 1, 1),
+				Next2:       net.IPv4(2, 2, 2, 2),
+				ProxyPublic: (*privateKey).PublicKey,
+			},
+		},
+		Covers: []CoverNodeProfile{
+			{
+				Cover:      net.IPv4(1, 1, 1, 1),
+				Secret_key: make([]byte, 16), // will need to get from helpers
+				Tree_uuid:  uuid.New(),
+			},
+		},
+		PublicKey:  (*privateKey).PublicKey,
+		PrivateKey: *privateKey,
+	}
+	log.Println("Self is created")
+	// just to get rid of unused error
+	self.New("default")
+
+	defer logfile.Close()
+	log.SetOutput(logfile)
 }

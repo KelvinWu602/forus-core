@@ -1,4 +1,4 @@
-package helpers
+package p2p
 
 import (
 	"crypto/ecdsa"
