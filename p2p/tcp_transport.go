@@ -1,6 +1,7 @@
 package p2p
 
 import (
+	"encoding/gob"
 	"log"
 	"net"
 )
@@ -40,14 +41,16 @@ type TCPTransport struct {
 	// config is the user defined metrics as yaml file
 	config TCPTransportConfig
 	// decoder is to identify which control message it is
-	decoder Decoder
+	codec Codec
 }
 
 func NewTCPTransport(listenAddr string) *TCPTransport {
-	return &TCPTransport{
+	t := TCPTransport{
 		listenAddress: listenAddr,
-		decoder:       GOBDecoder{},
+		codec:         GOBCodec{},
 	}
+
+	return &t
 }
 
 func (t *TCPTransport) Dial(addr string) error {
@@ -64,14 +67,13 @@ func (t *TCPTransport) Dial(addr string) error {
 func (t *TCPTransport) ListenAndAccept() error {
 
 	var err error
-
 	// Init listening
 	t.listener, err = net.Listen("tcp", t.listenAddress)
 	if err != nil {
 		log.Fatalln(err)
 		return err
 	}
-
+	log.Printf("listening at port: %s \n", t.listenAddress)
 	// Loop to accept connections
 	go t.acceptLoop()
 
@@ -85,15 +87,12 @@ func (t *TCPTransport) acceptLoop() {
 			log.Fatalf("tcp accept error: %s \n", err)
 			continue
 		}
-
+		log.Printf("accept at connection: %s \n", conn)
 		go t.handleConn(conn, false)
 	}
 }
 
 func (t *TCPTransport) handleConn(conn net.Conn, outbound bool) {
-
-	peer := NewTCPPeer(conn, outbound)
-	log.Printf("new incoming conection %+v \n ", peer)
 
 	// Make a buffer to hold incoming data.
 	// The incoming data is encrypted = 1460 bytes
@@ -106,8 +105,15 @@ func (t *TCPTransport) handleConn(conn net.Conn, outbound bool) {
 		if err != nil {
 			log.Fatalf("error reading message with length %d: %s \n", mss_length, err)
 		}
+		log.Printf("mss length: %d \n ", mss_length)
 
-		if err := t.decoder.Decode(conn, buf[:mss_length]); err != nil {
+		log.Println("control type: ", buf[:16])
+		// tmpBuf := bytes.NewBuffer(buf[:mss_length])
+		tmpStruct := new(ControlMessage)
+		gob.NewDecoder(conn).Decode(tmpStruct)
+		log.Printf("at tmpStruct: %s \n", tmpStruct)
+
+		if err := t.codec.Decode(conn, new(ControlMessage)); err != nil {
 			// if failed to decode control message
 			log.Fatalf(("message cannot be decoded \n"))
 			continue

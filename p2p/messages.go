@@ -2,16 +2,20 @@ package p2p
 
 import (
 	"crypto/ecdsa"
+	"crypto/rsa"
 	"net"
 
 	"github.com/google/uuid"
 )
 
 // every message starts with a control type to indicate what kind of handshake message they are
+type ControlMessage struct {
+	ControlType    [16]byte
+	ControlContent any
+}
 
 type QueryPathReq struct {
-	ControlType       [16]byte // in string = 16 * a
-	IncomingPublicKey ecdsa.PublicKey
+	n3PublicKey rsa.PublicKey
 }
 type QueryPathResp struct {
 	// return
@@ -20,8 +24,7 @@ type QueryPathResp struct {
 	// 3) IP address of next hop
 	// 4) IP address of next-next-hop
 	// 5) proxy's public key
-	ControlType    [16]byte
-	NodePublicKey  ecdsa.PublicKey
+	NodePublicKey  rsa.PublicKey
 	TreeUUID       uuid.UUID
 	NextHop        net.IP
 	NextNextHop    net.IP
@@ -29,8 +32,7 @@ type QueryPathResp struct {
 }
 
 type VerifyCoverReq struct {
-	ControlType [16]byte
-	NextHop     net.IP
+	NextHop net.IP
 }
 
 type VerifyCoverResp struct {
@@ -38,9 +40,8 @@ type VerifyCoverResp struct {
 }
 
 type ConnectPathReq struct {
-	ControlType [16]byte
-	TreeUUID    uuid.UUID
-	ReqPublic   ecdsa.PublicKey
+	TreeUUID  uuid.UUID
+	ReqPublic ecdsa.PublicKey
 }
 
 type ConnectPathResp struct {
@@ -48,21 +49,18 @@ type ConnectPathResp struct {
 }
 
 type CreateProxyReq struct {
-	ControlType [16]byte
 }
 
 type CreateProxyResp struct {
 }
 
 type DeleteCoverReq struct {
-	ControlType [16]byte
 }
 
 type DeleteCoverResp struct {
 }
 
 type ForwardReq struct {
-	ControlType [16]byte
 }
 
 type ForwardResp struct {
