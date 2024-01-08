@@ -8,14 +8,19 @@ import (
 	"github.com/google/uuid"
 )
 
+type TestingMessage struct {
+	N int
+}
+
 // every message starts with a control type to indicate what kind of handshake message they are
 type ControlMessage struct {
-	ControlType    [16]byte
+	// ControlType [16]byte
+	ControlType    string
 	ControlContent any
 }
 
 type QueryPathReq struct {
-	n3PublicKey rsa.PublicKey
+	N3PublicKey rsa.PublicKey
 }
 type QueryPathResp struct {
 	// return

@@ -76,14 +76,21 @@ func (n *Node) QueryPath(addr string) {
 			},
 		}
 	*/
+
 	queryPathRequest := ControlMessage{
-		ControlType:    [16]byte{'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a'},
-		ControlContent: n.publicKey,
+		ControlType: "queryPathRequest",
+		ControlContent: QueryPathReq{
+			N3PublicKey: n.publicKey,
+		},
 	}
 
-	log.Printf("%s \n", queryPathRequest.ControlType)
-	log.Printf("%s \n", queryPathRequest.ControlContent)
+	/*
+		queryPathRequest := &TestingMessage{10}
+	*/
+	// log.Printf("%s \n", queryPathRequest.ControlType)
+	// log.Printf("%s \n", queryPathRequest.ControlContent)
 	gob.Register(new(rsa.PublicKey))
+	gob.Register(new(QueryPathReq))
 	enc := gob.NewEncoder(conn)
 	err = enc.Encode(queryPathRequest)
 	if err != nil {

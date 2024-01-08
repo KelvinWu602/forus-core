@@ -96,22 +96,32 @@ func (t *TCPTransport) handleConn(conn net.Conn, outbound bool) {
 
 	// Make a buffer to hold incoming data.
 	// The incoming data is encrypted = 1460 bytes
-	buf := make([]byte, 1460)
+	// buf := make([]byte, 1460)
 
 	// Read the incoming message into the buffer
 	// A loop for continuous reading
 	for {
-		mss_length, err := conn.Read(buf)
-		if err != nil {
-			log.Fatalf("error reading message with length %d: %s \n", mss_length, err)
-		}
-		log.Printf("mss length: %d \n ", mss_length)
+		/*
+			mss_length, err := conn.Read(buf)
+			if err != nil {
+				log.Fatalf("error reading message with length %d: %s \n", mss_length, err)
+			}
+			log.Printf("mss length: %d \n ", mss_length)
+		*/
+		/*
+			tmpStruct := new(TestingMessage)
+			gob.NewDecoder(conn).Decode(tmpStruct)
+			log.Printf("at tmpStruct: %d \n", tmpStruct.N)
+		*/
 
-		log.Println("control type: ", buf[:16])
 		// tmpBuf := bytes.NewBuffer(buf[:mss_length])
 		tmpStruct := new(ControlMessage)
 		gob.NewDecoder(conn).Decode(tmpStruct)
-		log.Printf("at tmpStruct: %s \n", tmpStruct)
+		log.Printf("Control Type of incoming message: %s \n", tmpStruct.ControlType)
+		if tmpStruct.ControlType == "queryPathRequest" {
+			content := tmpStruct.ControlContent.(*QueryPathReq)
+			log.Printf("Public Key is %d \n", content.N3PublicKey)
+		}
 
 		if err := t.codec.Decode(conn, new(ControlMessage)); err != nil {
 			// if failed to decode control message
