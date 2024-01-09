@@ -33,7 +33,7 @@ type QueryPathResp struct {
 	TreeUUID       uuid.UUID
 	NextHop        net.IP
 	NextNextHop    net.IP
-	ProxyPublicKey ecdsa.PublicKey
+	ProxyPublicKey rsa.PublicKey
 }
 
 type VerifyCoverReq struct {
