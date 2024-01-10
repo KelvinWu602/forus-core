@@ -8,8 +8,9 @@ import (
 	"github.com/google/uuid"
 )
 
-type TestingMessage struct {
-	N int
+type DirectionalCM struct {
+	p  *TCPPeer
+	cm *ControlMessage
 }
 
 // every message starts with a control type to indicate what kind of handshake message they are

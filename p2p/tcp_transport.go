@@ -6,121 +6,102 @@ import (
 	"net"
 )
 
-// TCPNode represents the remote node over a TCP connection
-// A node should be capable to Dial and Accept simutaneously
-
-// Should peer and node be the same? NO
-// Peer is the access point of a node with other node
-// Self needs a list of peers to fetch which conn it Dial
 type TCPPeer struct {
-
-	// conn is the underlying connection
-	conn net.Conn
-	// true = self dial peer; false = peer dial self
-	outbound   bool
+	conn       net.Conn
+	outbound   bool // true: self dial peer; false: peer dial self
 	listenAddr string
 }
 
+// if outbound == false, conn is the peer's sending-end
+// 	we also need to know peer's recv-end to send msg to it
+// 	it is always the address at port 3001
+// if outbound == true, conn is the peer's recv-end
+// listenAddr will be written during the handshake
 func NewTCPPeer(conn net.Conn, outbound bool) *TCPPeer {
 	return &TCPPeer{
-		conn:       conn,
-		outbound:   outbound,
-		listenAddr: conn.RemoteAddr().String(),
+		conn:     conn,
+		outbound: outbound,
+		// listenAddr: conn.RemoteAddr().String(),
 	}
-
 }
 
 func (p *TCPPeer) Close() error {
 	return p.conn.Close()
 }
 
-type TCPTransportConfig struct {
+// Send() to the peer's recv-end i.e. if outbound == true
+// If outbound is false?
+func (p *TCPPeer) Send(b []byte) error {
+	_, err := p.conn.Write(b)
+	return err
 }
 
-type ControlMessageChan struct {
-	conn net.Conn
-	cm   ControlMessage
+// Readloop is a loop that receives all messages from a peer
+// Decode them
+// Then send to the message channel
+
+// also need to tell the node which peer it is
+// instead of having a control message channel, need something extra
+func (p *TCPPeer) ReadLoop(msgch chan *DirectionalCM) {
+	for {
+
+		msg := new(ControlMessage)
+		err := gob.NewDecoder(p.conn).Decode(msg)
+		log.Printf("%s receives a message of type %s \n", p.conn.LocalAddr(), msg.ControlType)
+		if err != nil {
+			log.Fatalf("message received cannot be decoded to a control message \n")
+			break
+		}
+
+		directionalCM := &DirectionalCM{
+			p:  p,
+			cm: msg,
+		}
+
+		msgch <- directionalCM
+	}
+	// TODO: need to unregister this peer
+	log.Printf("closing to readloop()")
+	p.Close()
 }
 
 type TCPTransport struct {
-	listenAddress string
-	listener      net.Listener
-
-	// config is the user defined metrics as yaml file
-	config TCPTransportConfig
-	// decoder is to identify which control message it is
-	codec Codec
+	listenAddr string
+	listener   net.Listener
+	AddPeer    chan *TCPPeer
+	RemovePeer chan *TCPPeer
 }
 
-func NewTCPTransport(listenAddr string) *TCPTransport {
-	t := TCPTransport{
-		listenAddress: listenAddr,
-		codec:         GOBCodec{},
+func NewTCPTransport(addr string) *TCPTransport {
+	return &TCPTransport{
+		listenAddr: addr,
 	}
-
-	return &t
 }
 
-func (t *TCPTransport) Dial(addr string, msgCh chan ControlMessage) error {
-	conn, err := net.Dial("tcp", addr)
+func (t *TCPTransport) ListenAndAccept() error {
+	ln, err := net.Listen("tcp", t.listenAddr)
 	if err != nil {
 		return err
 	}
 
-	go t.handleConn(conn, true, msgCh)
+	t.listener = ln
 
-	return nil
-}
+	log.Printf("server %s starts listening \n", ln.Addr().String())
 
-func (t *TCPTransport) ListenAndAccept(msgCh chan ControlMessage) error {
-
-	var err error
-	// Init listening
-	t.listener, err = net.Listen("tcp", t.listenAddress)
-	if err != nil {
-		log.Fatalln(err)
-		return err
-	}
-	log.Printf("listening at port: %s \n", t.listenAddress)
-	// Loop to accept connections
 	for {
-		conn, err := t.listener.Accept()
+		conn, err := ln.Accept()
 		if err != nil {
-			log.Fatalf("tcp accept error: %s \n", err)
+			log.Fatalf("listener cannot accept conn: %s \n", err)
 			continue
 		}
 
 		peer := &TCPPeer{
-			conn:       conn,
-			outbound:   false,
-			listenAddr: conn.RemoteAddr().String(),
+			conn:     conn,
+			outbound: false,
 		}
 
-		log.Printf("accept at connection from: %s \n", peer.listenAddr)
+		t.AddPeer <- peer
 
-		go t.handleConn(conn, false, msgCh)
-	}
-}
-
-func (t *TCPTransport) handleConn(conn net.Conn, outbound bool, msgCh chan ControlMessage) {
-	// Read the incoming message a decode it
-	// A loop for continuous reading
-	for {
-		// tmpBuf := bytes.NewBuffer(buf[:mss_length])
-		tmpStruct := new(ControlMessage)
-		err := gob.NewDecoder(conn).Decode(tmpStruct)
-		if err != nil {
-			// if failed to decode control message
-			log.Fatalf(("message cannot be decoded \n"))
-			continue
-		}
-
-		msg := tmpStruct
-		log.Printf("%s Received incoming CM at %s \n", conn.LocalAddr().String(), conn.RemoteAddr().String())
-		// the switch case should be on Node side
-		msgCh <- *msg
-
-		log.Printf("Control Type of incoming message: %s \n", tmpStruct.ControlType)
-
+		log.Printf("server %s recv conn from %s \n", conn.LocalAddr().String(), conn.RemoteAddr().String())
 	}
 }

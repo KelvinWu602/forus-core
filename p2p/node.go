@@ -6,6 +6,7 @@ import (
 	"encoding/gob"
 	"log"
 	"net"
+	"sync"
 
 	"github.com/google/uuid"
 )
@@ -15,15 +16,12 @@ type Node struct {
 	covers     []CoverNodeProfile
 	publicKey  rsa.PublicKey
 	privateKey rsa.PrivateKey
-	t          TCPTransport
-	msgChan    chan ControlMessage
-}
-
-// TempConn stores every outgoing net.Conn that are
-// handshaking (i.e. establishing connection before publishing message)
-type TempConn struct {
-	conn net.Conn
-	addr string
+	t          *TCPTransport
+	msgChan    chan *DirectionalCM
+	peers      map[string]*TCPPeer
+	addPeer    chan *TCPPeer
+	removePeer chan *TCPPeer
+	peerLock   sync.RWMutex
 }
 
 // New() creates a new node
@@ -37,7 +35,7 @@ func New(addr string) *Node {
 
 	path := PathProfile{
 		uuid:        uuid.New(),
-		next:        net.IPv4(1, 1, 1, 1),
+		next:        net.IPv4(127, 0, 0, 1),
 		next2:       net.IPv4(2, 2, 2, 2),
 		proxyPublic: *public,
 	}
@@ -50,32 +48,136 @@ func New(addr string) *Node {
 
 	tr := NewTCPTransport(addr)
 
-	return &Node{
+	self := &Node{
 		publicKey:  *public,
 		privateKey: *private,
 		paths:      []PathProfile{path},
 		covers:     []CoverNodeProfile{cover},
-		t:          *tr,
-		msgChan:    make(chan ControlMessage),
+		msgChan:    make(chan *DirectionalCM),
+		peers:      make(map[string]*TCPPeer),
+		addPeer:    make(chan *TCPPeer),
+		removePeer: make(chan *TCPPeer),
 	}
+
+	self.t = tr
+
+	tr.AddPeer = self.addPeer
+	tr.RemovePeer = self.removePeer
+
+	// TODO: API server here
+
+	return self
 }
 
 func (n *Node) Start() {
 	go n.loop()
 
-	err := n.t.ListenAndAccept(n.msgChan)
+	log.Printf("Node starts at %s \n", n.t.listenAddr)
+
+	err := n.t.ListenAndAccept()
 	if err != nil {
 		log.Fatalf("failed to listen: %s \n", err)
 	}
 
 }
 
-func (n *Node) QueryPath(addr string) {
+func (n *Node) AddPeer(p *TCPPeer) {
+	// lock to avoid concurrent add peers affect the state
+	n.peerLock.Lock()
+	defer n.peerLock.Unlock()
+	n.peers[p.listenAddr] = p
+
+}
+
+// TODO
+// loop() is the recv-end of the Node
+// it handles three scenarios
+// 1) a new peer is added to the node when they try to connect with the node
+// 		the channel is to be triggered when a new connection comes in
+// 2) when a new peer is leaving the node when ???
+// 3) a peer sent a control message to the node
+func (n *Node) loop() {
+	for {
+		select {
+		case peer := <-n.addPeer:
+			log.Printf("new peer for node %s \n", n.t.listenAddr)
+			if err := n.handleNewPeer(peer); err != nil {
+				log.Fatalf("handle new peer error %s \n", err)
+			}
+
+		case peer := <-n.removePeer:
+			log.Printf("removePeer channel of node sends trigger")
+			delete(n.peers, peer.conn.RemoteAddr().String())
+
+		case msg := <-n.msgChan:
+			go func() {
+				err := n.handleMessage(msg)
+				if err != nil {
+					log.Fatalf("handleMessage error %s \n", err)
+				}
+			}()
+		}
+	}
+}
+
+// TODO: handler for a new peer
+// 1) Handshake (?)
+// 2) readloop
+
+func (n *Node) handleNewPeer(peer *TCPPeer) error {
+	go peer.ReadLoop(n.msgChan)
+
+	// if the peer is an incoming node i.e outbound == false
+	// send the peer a peer list
+	// TODO: What to do with peer list?
+	if peer.outbound {
+		log.Printf("server %s recv conn from %s \n", peer.conn.RemoteAddr().String(), peer.conn.LocalAddr().String())
+	} else {
+		log.Printf("server %s recv conn from %s \n", peer.conn.LocalAddr().String(), peer.conn.RemoteAddr().String())
+	}
+	// modify peer map
+	n.AddPeer(peer)
+
+	// log.Printf("new peer %s \n", n.peers)
+	return nil
+}
+
+// TODO
+// switch between handlers
+func (n *Node) handleMessage(msg *DirectionalCM) error {
+	switch msg.cm.ControlType {
+	case "queryPathRequest":
+		return n.handleQueryPathReq(msg.p.conn, msg.cm.ControlContent.(*QueryPathReq))
+	case "queryPathResponse":
+		return n.handleQueryPathResp(msg.cm.ControlContent.(*QueryPathResp))
+	case "verifyCoverRequest":
+		return n.handleVerifyCoverReq(msg.p.conn, msg.cm.ControlContent.(*VerifyCoverReq))
+	case "verifyCoverResponse":
+		return n.handleVerifyCoverResp(msg.p.conn, msg.cm.ControlContent.(*VerifyCoverResp))
+
+	default:
+		return nil
+	}
+}
+
+func (n *Node) ConnectTo(addr string) net.Conn {
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		log.Fatalf("self connect node failed %s \n", err)
-		return
+		return nil
 	}
+	peer := &TCPPeer{
+		conn:     conn,
+		outbound: true,
+	}
+
+	n.addPeer <- peer
+
+	// conn.Close()
+	return conn
+}
+
+func (n *Node) QueryPath(conn net.Conn) {
 
 	queryPathRequest := ControlMessage{
 		ControlType: "queryPathRequest",
@@ -84,6 +186,8 @@ func (n *Node) QueryPath(addr string) {
 		},
 	}
 
+	// Need to make sure ReadLoop is running before sending it out
+
 	/*
 		queryPathRequest := &TestingMessage{10}
 	*/
@@ -91,37 +195,14 @@ func (n *Node) QueryPath(addr string) {
 	// log.Printf("%s \n", queryPathRequest.ControlContent)
 	gob.Register(new(rsa.PublicKey))
 	gob.Register(new(QueryPathReq))
-	enc := gob.NewEncoder(conn)
-	err = enc.Encode(queryPathRequest)
+	err := gob.NewEncoder(conn).Encode(queryPathRequest)
 	if err != nil {
 		log.Fatalf("something is wrong when sending encoded: %s \n", err)
 	}
-
-	// conn.Close()
-
 }
 
-// the loop is to handle the switching of all the incoming control message
-func (n *Node) loop() {
-	for {
-		select {
-		case msg := <-n.msgChan:
-			switch msg.ControlType {
-			case "queryPathRequest":
-				go n.handleQueryPathReq(msg.ControlContent.(*QueryPathReq))
-			case "queryPathResponse":
-				go n.handleQueryPathResp(msg.ControlContent.(*QueryPathResp))
-			default:
-				log.Fatalf("Cannot identify message type \n")
-				continue
-			}
-
-		}
-	}
-}
-func (n *Node) handleQueryPathReq(content *QueryPathReq) {
+func (n *Node) handleQueryPathReq(conn net.Conn, content *QueryPathReq) error {
 	// TODO: receive a public key and store somewhere
-	log.Printf("Content: %d \n", content.N3PublicKey)
 
 	// send response with QueryPathResp
 	// how do Node know which conn to send to?
@@ -136,20 +217,72 @@ func (n *Node) handleQueryPathReq(content *QueryPathReq) {
 			ProxyPublicKey: n.paths[0].proxyPublic,
 		},
 	}
-	log.Printf("%s \n", queryPathResponse.ControlType)
-	/*
-		gob.Register(new(QueryPathResp))
-		enc := gob.NewEncoder(conn)
-		err = enc.Encode(queryPathResponse)
-		if err != nil {
-			log.Fatalf("something is wrong when sending encoded: %s \n", err)
-		}
 
-		log.Printf("send it out \n")
-	*/
+	gob.Register(new(QueryPathResp))
+	enc := gob.NewEncoder(conn)
+	err := enc.Encode(queryPathResponse)
+	if err != nil {
+		log.Fatalf("something is wrong when sending encoded: %s \n", err)
+	}
 
+	return nil
 }
 
-func (n *Node) handleQueryPathResp(content *QueryPathResp) {
-	log.Printf("content public key %d \n ", content.NodePublicKey.N)
+func (n *Node) handleQueryPathResp(content *QueryPathResp) error {
+
+	// store control content to some place
+	log.Printf("next hop: %s \n", content.NextHop.String())
+
+	// verify cover
+	conn := n.ConnectTo(content.NextHop.String() + ":3002")
+	verifyCoverRequest := ControlMessage{
+		ControlType: "verifyCoverRequest",
+		ControlContent: VerifyCoverReq{
+			NextHop: content.NextHop,
+		},
+	}
+	gob.Register(new(VerifyCoverReq))
+	err := gob.NewEncoder(conn).Encode(verifyCoverRequest)
+	if err != nil {
+		log.Fatalf("something is wrong when sending encoded: %s \n", err)
+	}
+	return nil
+}
+
+func (n *Node) handleVerifyCoverReq(conn net.Conn, content *VerifyCoverReq) error {
+
+	var verifyCoverResponse ControlMessage
+	if n.t.listener.Addr().String() == string(content.NextHop) {
+		verifyCoverResponse = ControlMessage{
+			ControlType: "verifyCoverResponse",
+			ControlContent: VerifyCoverResp{
+				IsVerified: true,
+			},
+		}
+	} else {
+		verifyCoverResponse = ControlMessage{
+			ControlType: "verifyCoverResponse",
+			ControlContent: VerifyCoverResp{
+				IsVerified: false,
+			},
+		}
+	}
+
+	gob.Register(new(VerifyCoverResp))
+	err := gob.NewEncoder(conn).Encode(verifyCoverResponse)
+	if err != nil {
+		log.Fatalf("something is wrong when sending encoded: %s \n", err)
+	}
+	return nil
+}
+
+// TODO
+func (n *Node) handleVerifyCoverResp(conn net.Conn, content *VerifyCoverResp) error {
+
+	if content.IsVerified {
+		// store somewhere
+	} else {
+		// repeat the calling process
+	}
+	return nil
 }

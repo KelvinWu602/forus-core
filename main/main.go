@@ -1,29 +1,28 @@
 package main
 
 import (
-	"log"
+	"time"
 
 	"github.com/KelvinWu602/forus-core/p2p"
 )
 
+func makeServerAndStart(addr string) *p2p.Node {
+	s := p2p.New(addr)
+	go s.Start()
+	return s
+}
+
 func main() {
 
-	n1 := p2p.New(":3001")
+	makeServerAndStart(":3001") // n1
+	makeServerAndStart(":3003") // n2
+	n3 := makeServerAndStart(":3002")
 
-	// this go func encapsulates all actions on node N1
-	go func() {
-		go n1.Start()
-		log.Println("check for blocks on 3001")
-	}()
-
-	n3 := p2p.New(":3002")
-
-	// this go func encapsulates all actions on node N3
-	go func() {
-		go n3.Start()
-		n3.QueryPath(":3001")
-	}()
-
+	time.Sleep(1 * time.Second)
+	// 3002 to 3001
+	conn := n3.ConnectTo(":3001")
+	time.Sleep(1 * time.Second)
+	n3.QueryPath(conn)
 	// a placeholder just to make something working
 	select {}
 }
