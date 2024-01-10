@@ -33,15 +33,16 @@ func New(addr string) *Node {
 	}
 	public := (*private).Public().(*rsa.PublicKey)
 
+	// TODO(@SauDoge): should be replaced by information returned by ND
+	// Currently pseudo
 	path := PathProfile{
 		uuid:        uuid.New(),
 		next:        net.IPv4(127, 0, 0, 1),
-		next2:       net.IPv4(2, 2, 2, 2),
+		next2:       net.IPv4(127, 0, 0, 1),
 		proxyPublic: *public,
 	}
-
 	cover := CoverNodeProfile{
-		cover:     net.IPv4(1, 1, 1, 1),
+		cover:     net.IPv4(127, 0, 0, 1),
 		secretKey: "aaaa",
 		treeUUID:  uuid.New(),
 	}
@@ -64,7 +65,7 @@ func New(addr string) *Node {
 	tr.AddPeer = self.addPeer
 	tr.RemovePeer = self.removePeer
 
-	// TODO: API server here
+	// TODO(@SauDoge): API server here
 
 	return self
 }
@@ -89,12 +90,11 @@ func (n *Node) AddPeer(p *TCPPeer) {
 
 }
 
-// TODO
 // loop() is the recv-end of the Node
 // it handles three scenarios
 // 1) a new peer is added to the node when they try to connect with the node
 // 		the channel is to be triggered when a new connection comes in
-// 2) when a new peer is leaving the node when ???
+// 2) when a new peer is leaving the node
 // 3) a peer sent a control message to the node
 func (n *Node) loop() {
 	for {
@@ -105,6 +105,7 @@ func (n *Node) loop() {
 				log.Fatalf("handle new peer error %s \n", err)
 			}
 
+		// TODO (@SauDoge) when should removePeer be done
 		case peer := <-n.removePeer:
 			log.Printf("removePeer channel of node sends trigger")
 			delete(n.peers, peer.conn.RemoteAddr().String())
@@ -120,30 +121,26 @@ func (n *Node) loop() {
 	}
 }
 
-// TODO: handler for a new peer
-// 1) Handshake (?)
-// 2) readloop
+// Whenever a new peer enters, trigger a readLoop
 
 func (n *Node) handleNewPeer(peer *TCPPeer) error {
 	go peer.ReadLoop(n.msgChan)
 
 	// if the peer is an incoming node i.e outbound == false
-	// send the peer a peer list
-	// TODO: What to do with peer list?
 	if peer.outbound {
 		log.Printf("server %s recv conn from %s \n", peer.conn.RemoteAddr().String(), peer.conn.LocalAddr().String())
 	} else {
 		log.Printf("server %s recv conn from %s \n", peer.conn.LocalAddr().String(), peer.conn.RemoteAddr().String())
 	}
+
 	// modify peer map
 	n.AddPeer(peer)
 
-	// log.Printf("new peer %s \n", n.peers)
 	return nil
 }
 
-// TODO
 // switch between handlers
+// TODO(@SauDoge): finish all the switch cases
 func (n *Node) handleMessage(msg *DirectionalCM) error {
 	switch msg.cm.ControlType {
 	case "queryPathRequest":
@@ -154,7 +151,6 @@ func (n *Node) handleMessage(msg *DirectionalCM) error {
 		return n.handleVerifyCoverReq(msg.p.conn, msg.cm.ControlContent.(*VerifyCoverReq))
 	case "verifyCoverResponse":
 		return n.handleVerifyCoverResp(msg.p.conn, msg.cm.ControlContent.(*VerifyCoverResp))
-
 	default:
 		return nil
 	}
