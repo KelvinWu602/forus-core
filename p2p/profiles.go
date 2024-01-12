@@ -2,6 +2,7 @@ package p2p
 
 import (
 	"crypto/rsa"
+	"math/big"
 	"net"
 
 	"github.com/google/uuid"
@@ -14,11 +15,12 @@ type PathProfile struct {
 	next        net.IP        // the IP address of the next hop node in the path
 	next2       net.IP        // the IP address of the next-next hop node in the path; defaut to be "255.255.255.255"
 	proxyPublic rsa.PublicKey // the public key of the proxy node of this path.
+	symKey      big.Int
 }
 
 // contains communication info for all cover nodes of the particular node.
 type CoverNodeProfile struct {
 	cover     net.IP // IP address of the cover node
-	secretKey string
+	secretKey big.Int
 	treeUUID  uuid.UUID
 }

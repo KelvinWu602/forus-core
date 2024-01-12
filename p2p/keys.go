@@ -1,18 +1,19 @@
-package helpers
+package p2p
 
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/rand"
+	"crypto/rsa"
 	"encoding/hex"
 	"fmt"
-	"math/rand"
-	"time"
+	"math/big"
 )
 
 const charSet = "abcdefghijklmnopqrstuvwxyz" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
 // create a seeded Random number of type Rand
-var seededRand *rand.Rand = rand.New(rand.NewSource(time.Now().UnixNano()))
+// var seededRand *rand.Rand = rand.New(rand.NewSource(time.Now().UnixNano()))
 
 // "crypto/rsa"
 // "crypto/rand"
@@ -41,6 +42,7 @@ func PKCS5UnPadding(src []byte) []byte {
 	return src[:(length - unpadding)]
 }
 
+/*
 func generateSecretKey(length int, charset string) SecretKey {
 	b := make([]byte, length)
 	for i := range b {
@@ -48,6 +50,7 @@ func generateSecretKey(length int, charset string) SecretKey {
 	}
 	return b
 }
+*/
 
 func encryptAES(key SecretKey, plaintext string) (string, error) {
 	// iv := "my16digitIvKey12"
@@ -78,5 +81,34 @@ func decryptAES(key SecretKey, ciphertext []byte) ([]byte, error) {
 
 }
 
-type KeyExchange struct {
+type DHKeyExchange struct {
+	G      big.Int
+	P      big.Int
+	Secret big.Int
+}
+
+func NewKeyExchange(a rsa.PublicKey) DHKeyExchange {
+
+	g, _ := rand.Prime(rand.Reader, 4)
+	p, _ := rand.Prime(rand.Reader, 4)
+	for g == p {
+		p, _ = rand.Prime(rand.Reader, 4)
+	}
+	return DHKeyExchange{
+		G:      *g,
+		P:      *p,
+		Secret: *big.NewInt(0).Exp(g, a.N, p),
+	}
+}
+
+func (dh *DHKeyExchange) GenerateReturn(b rsa.PublicKey) DHKeyExchange {
+	return DHKeyExchange{
+		G:      dh.G,
+		P:      dh.P,
+		Secret: *big.NewInt(0).Exp(&dh.G, b.N, &dh.P),
+	}
+}
+
+func (dh *DHKeyExchange) GetSymKey(b rsa.PublicKey) big.Int {
+	return *big.NewInt(0).Exp(&dh.G, b.N, &dh.P)
 }

@@ -1,12 +1,16 @@
 package p2p
 
 import (
-	"crypto/ecdsa"
 	"crypto/rsa"
 	"net"
 
 	"github.com/google/uuid"
 )
+
+// Message is actual message that will show up on frontend
+type Message struct {
+	content string
+}
 
 type DirectionalCM struct {
 	p  *TCPPeer
@@ -23,6 +27,13 @@ type ControlMessage struct {
 type QueryPathReq struct {
 	N3PublicKey rsa.PublicKey
 }
+
+type Path struct {
+	TreeUUID       uuid.UUID
+	NextHop        net.IP
+	NextNextHop    net.IP
+	ProxyPublicKey rsa.PublicKey
+}
 type QueryPathResp struct {
 	// return
 	// 1) node's public key
@@ -30,11 +41,8 @@ type QueryPathResp struct {
 	// 3) IP address of next hop
 	// 4) IP address of next-next-hop
 	// 5) proxy's public key
-	NodePublicKey  rsa.PublicKey
-	TreeUUID       uuid.UUID
-	NextHop        net.IP
-	NextNextHop    net.IP
-	ProxyPublicKey rsa.PublicKey
+	NodePublicKey rsa.PublicKey
+	Paths         []Path
 }
 
 type VerifyCoverReq struct {
@@ -46,21 +54,29 @@ type VerifyCoverResp struct {
 }
 
 type ConnectPathReq struct {
-	TreeUUID  uuid.UUID
-	ReqPublic ecdsa.PublicKey
+	TreeUUID       uuid.UUID
+	ReqKeyExchange DHKeyExchange
 }
 
 type ConnectPathResp struct {
-	RespPublic ecdsa.PublicKey
+	Status          bool
+	RespKeyExchange DHKeyExchange
 }
 
 type CreateProxyReq struct {
+	ReqKeyExchange DHKeyExchange
+	ReqPublicKey   rsa.PublicKey
 }
 
 type CreateProxyResp struct {
+	Status          bool
+	RespKeyExchange DHKeyExchange
+	N1Public        rsa.PublicKey
+	TreeUUID        uuid.UUID
 }
 
 type DeleteCoverReq struct {
+	Status bool
 }
 
 type DeleteCoverResp struct {

@@ -4,7 +4,9 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/gob"
+	"errors"
 	"log"
+	"math/big"
 	"net"
 	"sync"
 
@@ -12,16 +14,31 @@ import (
 )
 
 type Node struct {
-	paths      []PathProfile
-	covers     []CoverNodeProfile
-	publicKey  rsa.PublicKey
-	privateKey rsa.PrivateKey
+	// Info members
+	paths       map[uuid.UUID]PathProfile
+	covers      map[string]CoverNodeProfile
+	publicKey   rsa.PublicKey
+	privateKey  rsa.PrivateKey
+	keyExchange DHKeyExchange
+	// TODO(@SauDoge) make sure no future connection init by n connects to any paths of covers
+
+	// Temp info members
+	// Is a lock needed?
+	halfOpenPath PathProfile
+	tempQueue    chan Message
+
+	// Control members
 	t          *TCPTransport
 	msgChan    chan *DirectionalCM
 	peers      map[string]*TCPPeer
 	addPeer    chan *TCPPeer
 	removePeer chan *TCPPeer
 	peerLock   sync.RWMutex
+
+	// Activity members
+	// TODO(@SauDoge) check period if all covers are alive, remove those that are not
+	// Callbacks?
+
 }
 
 // New() creates a new node
@@ -43,7 +60,7 @@ func New(addr string) *Node {
 	}
 	cover := CoverNodeProfile{
 		cover:     net.IPv4(127, 0, 0, 1),
-		secretKey: "aaaa",
+		secretKey: *big.NewInt(100),
 		treeUUID:  uuid.New(),
 	}
 
@@ -52,8 +69,8 @@ func New(addr string) *Node {
 	self := &Node{
 		publicKey:  *public,
 		privateKey: *private,
-		paths:      []PathProfile{path},
-		covers:     []CoverNodeProfile{cover},
+		paths:      make(map[uuid.UUID]PathProfile),
+		covers:     make(map[string]CoverNodeProfile),
 		msgChan:    make(chan *DirectionalCM),
 		peers:      make(map[string]*TCPPeer),
 		addPeer:    make(chan *TCPPeer),
@@ -61,6 +78,9 @@ func New(addr string) *Node {
 	}
 
 	self.t = tr
+	self.paths[path.uuid] = path
+	self.covers[cover.cover.String()] = cover
+	self.keyExchange = NewKeyExchange(self.publicKey)
 
 	tr.AddPeer = self.addPeer
 	tr.RemovePeer = self.removePeer
@@ -146,11 +166,21 @@ func (n *Node) handleMessage(msg *DirectionalCM) error {
 	case "queryPathRequest":
 		return n.handleQueryPathReq(msg.p.conn, msg.cm.ControlContent.(*QueryPathReq))
 	case "queryPathResponse":
-		return n.handleQueryPathResp(msg.cm.ControlContent.(*QueryPathResp))
+		return n.handleQueryPathResp(msg.p.conn, msg.cm.ControlContent.(*QueryPathResp))
 	case "verifyCoverRequest":
 		return n.handleVerifyCoverReq(msg.p.conn, msg.cm.ControlContent.(*VerifyCoverReq))
 	case "verifyCoverResponse":
 		return n.handleVerifyCoverResp(msg.p.conn, msg.cm.ControlContent.(*VerifyCoverResp))
+	case "connectPathRequest":
+		return n.handleConnectPathReq(msg.p.conn, msg.cm.ControlContent.(*ConnectPathReq))
+	case "connectPathResponse":
+		return n.handleConnectPathResp(msg.p.conn, msg.cm.ControlContent.(*ConnectPathResp))
+	case "createProxyRequest":
+		return n.handleCreateProxyReq(msg.p.conn, msg.cm.ControlContent.(*CreateProxyReq))
+	case "createProxyResponse":
+		return n.handleCreateProxyResp(msg.p.conn, msg.cm.ControlContent.(*CreateProxyResp))
+	case "deleteCoverRequest":
+		return n.handleDeleteCoverReq(msg.p.conn, msg.cm.ControlContent.(*DeleteCoverReq))
 	default:
 		return nil
 	}
@@ -197,23 +227,95 @@ func (n *Node) QueryPath(conn net.Conn) {
 	}
 }
 
+func (n *Node) ConnectPath(conn net.Conn, treeID uuid.UUID, n3X DHKeyExchange) {
+
+	gob.Register(new(DHKeyExchange))
+	gob.Register(new(ConnectPathReq))
+	connectPathReq := ControlMessage{
+		ControlType: "connectPathRequst",
+		ControlContent: ConnectPathReq{
+			TreeUUID:       treeID,
+			ReqKeyExchange: n3X,
+		},
+	}
+	gob.NewEncoder(conn).Encode(connectPathReq)
+
+}
+
+// TODO(@SauDoge) request a proxy triggered by empty path in pathResp
+func (n *Node) RequestProxy(conn net.Conn, n3X DHKeyExchange) {
+	createProxyRequest := ControlMessage{
+		ControlType: "createProxyRequest",
+		ControlContent: CreateProxyReq{
+			ReqKeyExchange: n3X,
+			ReqPublicKey:   n.publicKey,
+		},
+	}
+
+	gob.Register(new(CreateProxyReq))
+	gob.NewEncoder(conn).Encode(createProxyRequest)
+}
+
+// TODO(@SauDoge) move up one step
+func (n *Node) MoveUp(conn net.Conn, uuid0 uuid.UUID) {
+
+	// send delete cover request
+	deleteCoverRequest := ControlMessage{
+		ControlType: "deleteCoverRequest",
+		ControlContent: DeleteCoverReq{
+			Status: true,
+		},
+	}
+	gob.Register(new(DeleteCoverReq))
+	gob.NewEncoder(conn).Encode(deleteCoverRequest)
+
+	// close the connection
+	conn.Close()
+
+	// TODO (@SauDoge) store queued message to be sent out: probably also need some lock
+
+	// TODO (@SauDoge) move up
+	newNext := n.paths[uuid0].next2
+	delete(n.paths, uuid0)
+	log.Println("newNext is %s \n", newNext)
+	// switch case depend on newNext
+	// If newNext is node -> try connect
+	// If failed OR newNext is IPFS -> find a new Cluster
+	// If no new cluster -> become proxy itself
+
+}
+
 func (n *Node) handleQueryPathReq(conn net.Conn, content *QueryPathReq) error {
 	// TODO: receive a public key and store somewhere
 
 	// send response with QueryPathResp
 	// how do Node know which conn to send to?
 	// there should be someway to maintain the conn
+
 	queryPathResponse := ControlMessage{
 		ControlType: "queryPathResponse",
-		ControlContent: QueryPathResp{
-			NodePublicKey:  n.publicKey,
-			TreeUUID:       n.paths[0].uuid,
-			NextHop:        n.paths[0].next,
-			NextNextHop:    n.paths[0].next2,
-			ProxyPublicKey: n.paths[0].proxyPublic,
-		},
 	}
-
+	if len(n.paths) != 0 {
+		var respPaths []Path
+		for _, v := range n.paths {
+			respPaths = append(respPaths, Path{
+				TreeUUID:       v.uuid,
+				NextHop:        v.next,
+				NextNextHop:    v.next2,
+				ProxyPublicKey: v.proxyPublic,
+			})
+		}
+		queryPathResponse.ControlContent = QueryPathResp{
+			NodePublicKey: n.publicKey,
+			Paths:         respPaths,
+		}
+	} else {
+		queryPathResponse.ControlContent = QueryPathResp{
+			NodePublicKey: n.publicKey,
+			Paths:         []Path{},
+		}
+	}
+	gob.Register(new(Path))
 	gob.Register(new(QueryPathResp))
 	enc := gob.NewEncoder(conn)
 	err := enc.Encode(queryPathResponse)
@@ -224,21 +326,45 @@ func (n *Node) handleQueryPathReq(conn net.Conn, content *QueryPathReq) error {
 	return nil
 }
 
-func (n *Node) handleQueryPathResp(content *QueryPathResp) error {
+func (n *Node) handleQueryPathResp(conn net.Conn, content *QueryPathResp) error {
 
-	// store control content to some place
-	log.Printf("next hop: %s \n", content.NextHop.String())
+	// If []paths is empty
+	if len(content.Paths) == 0 {
+		n.RequestProxy(conn, n.keyExchange)
+		return nil
+	}
+
+	// TODO(@SauDoge) Handling route loop problems
+	for k, v := range content.Paths {
+		// if repeated
+		if _, ok := n.paths[v.TreeUUID]; ok {
+			if k == len(content.Paths) {
+				return errors.New("tree UUID duplication")
+			}
+			continue
+		} else {
+			n.halfOpenPath = PathProfile{
+				uuid:        v.TreeUUID,
+				next:        net.IP(conn.RemoteAddr().Network()),
+				next2:       v.NextHop,
+				proxyPublic: v.ProxyPublicKey,
+			}
+			break
+		}
+	}
+
+	log.Printf("next hop: %s \n", n.halfOpenPath.next.String())
 
 	// verify cover
-	conn := n.ConnectTo(content.NextHop.String() + ":3002")
+	nextConn := n.ConnectTo(n.halfOpenPath.next.String() + ":3002")
 	verifyCoverRequest := ControlMessage{
 		ControlType: "verifyCoverRequest",
 		ControlContent: VerifyCoverReq{
-			NextHop: content.NextHop,
+			NextHop: n.halfOpenPath.next,
 		},
 	}
 	gob.Register(new(VerifyCoverReq))
-	err := gob.NewEncoder(conn).Encode(verifyCoverRequest)
+	err := gob.NewEncoder(nextConn).Encode(verifyCoverRequest)
 	if err != nil {
 		log.Fatalf("something is wrong when sending encoded: %s \n", err)
 	}
@@ -272,13 +398,123 @@ func (n *Node) handleVerifyCoverReq(conn net.Conn, content *VerifyCoverReq) erro
 	return nil
 }
 
-// TODO
+// TODO(@SauDoge)
 func (n *Node) handleVerifyCoverResp(conn net.Conn, content *VerifyCoverResp) error {
 
-	if content.IsVerified {
-		// store somewhere
+	if !content.IsVerified {
+		// half open path is already stored
+		return nil
+
 	} else {
-		// repeat the calling process
+		// TODO(@SauDoge): if verification failed, repeat the calling process
+		n.halfOpenPath = PathProfile{}
+		return nil
+	}
+
+}
+
+func (n *Node) handleConnectPathReq(conn net.Conn, content *ConnectPathReq) error {
+
+	// send resp
+	respKeX := content.ReqKeyExchange.GenerateReturn(n.publicKey)
+
+	connectPathResponse := ControlMessage{
+		ControlType: "connectPathResponse",
+		ControlContent: ConnectPathResp{
+			Status:          true,
+			RespKeyExchange: respKeX,
+		},
+	}
+
+	gob.Register(new(ConnectPathResp))
+	gob.Register(new(DHKeyExchange))
+	gob.NewEncoder(conn).Encode(connectPathResponse)
+
+	// create secret key
+	secretKey := content.ReqKeyExchange.GetSymKey(n.publicKey)
+	log.Printf("Here is the secret key: %d \n", secretKey.Int64())
+
+	// add incoming node as a cover node
+	n.covers[conn.RemoteAddr().String()] = CoverNodeProfile{
+		cover:     net.IP(conn.RemoteAddr().Network()),
+		secretKey: secretKey,
+		treeUUID:  content.TreeUUID,
+	}
+
+	return nil
+}
+
+func (n *Node) handleConnectPathResp(conn net.Conn, content *ConnectPathResp) error {
+
+	if content.Status {
+		secretKey := content.RespKeyExchange.GetSymKey(n.publicKey)
+		// TODO(@SauDoge): write new path into own paths
+		n.halfOpenPath.symKey = secretKey
+		n.paths[n.halfOpenPath.uuid] = n.halfOpenPath
+		n.halfOpenPath = PathProfile{}
+	} else {
+		// TODO(@SauDoge): error handling if not accepted
+	}
+
+	// TODO(@SauDoge) trigger a routine to send cover message repeatedly
+	return nil
+}
+
+func (n *Node) handleCreateProxyReq(conn net.Conn, content *CreateProxyReq) error {
+	// TODO(@SauDoge) 1) access IS
+
+	// new path as self becomes the starting point of a new path
+	newID, _ := uuid.NewUUID()
+	n.paths[newID] = PathProfile{
+		uuid:        newID,
+		next:        net.IPv4(192, 0, 0, 1), // TODO(@SauDoge) change to real from pseudo IPFS IP
+		next2:       nil,
+		symKey:      content.ReqKeyExchange.GetSymKey(n.publicKey),
+		proxyPublic: n.publicKey,
+	}
+
+	// new cover node
+	n.covers[conn.RemoteAddr().String()] = CoverNodeProfile{
+		cover:     net.IP(conn.RemoteAddr().String()),
+		secretKey: n.paths[newID].symKey,
+		treeUUID:  newID,
+	}
+
+	// send a create proxy response back
+	createProxyResponse := ControlMessage{
+		ControlType: "createProxyResponse",
+		ControlContent: CreateProxyResp{
+			Status:          true,
+			RespKeyExchange: content.ReqKeyExchange.GenerateReturn(n.publicKey),
+			N1Public:        n.publicKey,
+			TreeUUID:        newID,
+		},
+	}
+
+	gob.Register(new(CreateProxyResp))
+	gob.NewEncoder(conn).Encode(createProxyResponse)
+
+	return nil
+}
+
+func (n *Node) handleCreateProxyResp(conn net.Conn, content *CreateProxyResp) error {
+
+	secretKey := content.RespKeyExchange.GetSymKey(n.publicKey)
+
+	n.paths[content.TreeUUID] = PathProfile{
+		uuid:        content.TreeUUID,
+		next:        net.IP(conn.RemoteAddr().Network()),
+		next2:       net.IPv4(192, 0, 0, 1), // TODO(@SauDoge) change to real from pseudo IPFS IP,
+		symKey:      secretKey,
+		proxyPublic: content.N1Public,
+	}
+
+	return nil
+}
+
+func (n *Node) handleDeleteCoverReq(conn net.Conn, content *DeleteCoverReq) error {
+	if content.Status {
+		delete(n.covers, conn.RemoteAddr().String())
 	}
 	return nil
 }
