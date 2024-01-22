@@ -8,7 +8,8 @@ import (
 
 func makeServerAndStart(addr string) *p2p.Node {
 	s := p2p.New(addr)
-	go s.Start()
+	go s.StartTCP()
+	go s.StartHTTP()
 	return s
 }
 

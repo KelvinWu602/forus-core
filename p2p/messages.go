@@ -2,7 +2,6 @@ package p2p
 
 import (
 	"crypto/rsa"
-	"net"
 
 	"github.com/google/uuid"
 )
@@ -30,8 +29,8 @@ type QueryPathReq struct {
 
 type Path struct {
 	TreeUUID       uuid.UUID
-	NextHop        net.IP
-	NextNextHop    net.IP
+	NextHop        string
+	NextNextHop    string
 	ProxyPublicKey rsa.PublicKey
 }
 type QueryPathResp struct {
@@ -46,7 +45,7 @@ type QueryPathResp struct {
 }
 
 type VerifyCoverReq struct {
-	NextHop net.IP
+	NextHop string
 }
 
 type VerifyCoverResp struct {

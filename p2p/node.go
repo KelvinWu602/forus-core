@@ -8,7 +8,9 @@ import (
 	"log"
 	"math/big"
 	"net"
+	"net/http"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -27,7 +29,7 @@ type Node struct {
 	halfOpenPath PathProfile
 	tempQueue    chan Message
 
-	// Control members
+	// Internode Control members
 	t          *TCPTransport
 	msgChan    chan *DirectionalCM
 	peers      map[string]*TCPPeer
@@ -44,22 +46,24 @@ type Node struct {
 // New() creates a new node
 // This should only be called once for self
 func New(addr string) *Node {
+
 	private, err := rsa.GenerateKey(rand.Reader, 1024)
 	if err != nil {
 		log.Fatalf("generate private key failed: %s \n ", err)
 	}
 	public := (*private).Public().(*rsa.PublicKey)
 
-	// TODO(@SauDoge): should be replaced by information returned by ND
+	// TODO(@SauDoge): should be replaced by information returned by ND on localhost port 3200
 	// Currently pseudo
+
 	path := PathProfile{
 		uuid:        uuid.New(),
-		next:        net.IPv4(127, 0, 0, 1),
-		next2:       net.IPv4(127, 0, 0, 1),
+		next:        "127.0.0.1:3001",
+		next2:       "127.0.0.1:3001",
 		proxyPublic: *public,
 	}
 	cover := CoverNodeProfile{
-		cover:     net.IPv4(127, 0, 0, 1),
+		cover:     "127.0.0.1:3001",
 		secretKey: *big.NewInt(100),
 		treeUUID:  uuid.New(),
 	}
@@ -79,18 +83,16 @@ func New(addr string) *Node {
 
 	self.t = tr
 	self.paths[path.uuid] = path
-	self.covers[cover.cover.String()] = cover
+	self.covers[cover.cover] = cover
 	self.keyExchange = NewKeyExchange(self.publicKey)
 
 	tr.AddPeer = self.addPeer
 	tr.RemovePeer = self.removePeer
-
-	// TODO(@SauDoge): API server here
-
 	return self
 }
 
-func (n *Node) Start() {
+// StartTCP() starts the internode communicating TCP
+func (n *Node) StartTCP() {
 	go n.loop()
 
 	log.Printf("Node starts at %s \n", n.t.listenAddr)
@@ -100,6 +102,24 @@ func (n *Node) Start() {
 		log.Fatalf("failed to listen: %s \n", err)
 	}
 
+}
+
+func (n *Node) StartHTTP() {
+	// TODO(@SauDoge): HTTP server here
+	hs := &http.Server{
+		Addr:         ":3000",
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/Join", n.handleJoinCluster)
+	mux.HandleFunc("/Leave", n.handleLeaveCluster)
+	mux.HandleFunc("/GetMessage", n.handleGetMessage)
+	mux.HandleFunc("/PostMessage", n.handlePostMessage)
+
+	hs.Handler = mux
+
+	go hs.ListenAndServe()
 }
 
 func (n *Node) AddPeer(p *TCPPeer) {
@@ -112,10 +132,10 @@ func (n *Node) AddPeer(p *TCPPeer) {
 
 // loop() is the recv-end of the Node
 // it handles three scenarios
-// 1) a new peer is added to the node when they try to connect with the node
-// 		the channel is to be triggered when a new connection comes in
-// 2) when a new peer is leaving the node
-// 3) a peer sent a control message to the node
+//  1. a new peer is added to the node when they try to connect with the node
+//     the channel is to be triggered when a new connection comes in
+//  2. when a new peer is leaving the node
+//  3. a peer sent a control message to the node
 func (n *Node) loop() {
 	for {
 		select {
@@ -277,7 +297,7 @@ func (n *Node) MoveUp(conn net.Conn, uuid0 uuid.UUID) {
 	// TODO (@SauDoge) move up
 	newNext := n.paths[uuid0].next2
 	delete(n.paths, uuid0)
-	log.Println("newNext is %s \n", newNext)
+	log.Printf("newNext is %s \n", newNext)
 	// switch case depend on newNext
 	// If newNext is node -> try connect
 	// If failed OR newNext is IPFS -> find a new Cluster
@@ -345,7 +365,7 @@ func (n *Node) handleQueryPathResp(conn net.Conn, content *QueryPathResp) error 
 		} else {
 			n.halfOpenPath = PathProfile{
 				uuid:        v.TreeUUID,
-				next:        net.IP(conn.RemoteAddr().Network()),
+				next:        conn.RemoteAddr().String(),
 				next2:       v.NextHop,
 				proxyPublic: v.ProxyPublicKey,
 			}
@@ -353,10 +373,10 @@ func (n *Node) handleQueryPathResp(conn net.Conn, content *QueryPathResp) error 
 		}
 	}
 
-	log.Printf("next hop: %s \n", n.halfOpenPath.next.String())
+	log.Printf("next hop: %s \n", net.ParseIP((conn.RemoteAddr().String())))
 
 	// verify cover
-	nextConn := n.ConnectTo(n.halfOpenPath.next.String() + ":3002")
+	nextConn := n.ConnectTo(n.halfOpenPath.next)
 	verifyCoverRequest := ControlMessage{
 		ControlType: "verifyCoverRequest",
 		ControlContent: VerifyCoverReq{
@@ -436,7 +456,7 @@ func (n *Node) handleConnectPathReq(conn net.Conn, content *ConnectPathReq) erro
 
 	// add incoming node as a cover node
 	n.covers[conn.RemoteAddr().String()] = CoverNodeProfile{
-		cover:     net.IP(conn.RemoteAddr().Network()),
+		cover:     conn.RemoteAddr().String(),
 		secretKey: secretKey,
 		treeUUID:  content.TreeUUID,
 	}
@@ -467,15 +487,15 @@ func (n *Node) handleCreateProxyReq(conn net.Conn, content *CreateProxyReq) erro
 	newID, _ := uuid.NewUUID()
 	n.paths[newID] = PathProfile{
 		uuid:        newID,
-		next:        net.IPv4(192, 0, 0, 1), // TODO(@SauDoge) change to real from pseudo IPFS IP
-		next2:       nil,
+		next:        "127.0.0.1:3001", // TODO(@SauDoge) change to real from pseudo IPFS IP
+		next2:       "127.0.0.1:3001",
 		symKey:      content.ReqKeyExchange.GetSymKey(n.publicKey),
 		proxyPublic: n.publicKey,
 	}
 
 	// new cover node
 	n.covers[conn.RemoteAddr().String()] = CoverNodeProfile{
-		cover:     net.IP(conn.RemoteAddr().String()),
+		cover:     conn.RemoteAddr().String(),
 		secretKey: n.paths[newID].symKey,
 		treeUUID:  newID,
 	}
@@ -503,8 +523,8 @@ func (n *Node) handleCreateProxyResp(conn net.Conn, content *CreateProxyResp) er
 
 	n.paths[content.TreeUUID] = PathProfile{
 		uuid:        content.TreeUUID,
-		next:        net.IP(conn.RemoteAddr().Network()),
-		next2:       net.IPv4(192, 0, 0, 1), // TODO(@SauDoge) change to real from pseudo IPFS IP,
+		next:        conn.RemoteAddr().String(),
+		next2:       "127.0.0.1:3001", // TODO(@SauDoge) change to real from pseudo IPFS IP,
 		symKey:      secretKey,
 		proxyPublic: content.N1Public,
 	}
@@ -517,4 +537,29 @@ func (n *Node) handleDeleteCoverReq(conn net.Conn, content *DeleteCoverReq) erro
 		delete(n.covers, conn.RemoteAddr().String())
 	}
 	return nil
+}
+
+// HTTP handlers
+func (n *Node) handleJoinCluster(w http.ResponseWriter, req *http.Request) {
+	// call ND service to retrieve remote IP and join serf cluster
+
+	// establish tree formation
+	conn := n.ConnectTo(":3001")
+	n.QueryPath(conn)
+	// n.ConnectPath(conn, n.paths)
+}
+
+func (n *Node) handleLeaveCluster(w http.ResponseWriter, req *http.Request) {
+	// remove from tree
+
+	// call ND to leave serf cluster
+}
+
+func (n *Node) handleGetMessage(w http.ResponseWriter, req *http.Request) {
+	// call IS
+}
+
+func (n *Node) handlePostMessage(w http.ResponseWriter, req *http.Request) {
+	// call forward
+
 }
