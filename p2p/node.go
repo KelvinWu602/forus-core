@@ -10,7 +10,6 @@ import (
 	"net"
 	"net/http"
 	"sync"
-	"time"
 
 	"github.com/google/uuid"
 )
@@ -88,6 +87,7 @@ func New(addr string) *Node {
 
 	tr.AddPeer = self.addPeer
 	tr.RemovePeer = self.removePeer
+
 	return self
 }
 
@@ -105,21 +105,16 @@ func (n *Node) StartTCP() {
 }
 
 func (n *Node) StartHTTP() {
-	// TODO(@SauDoge): HTTP server here
-	hs := &http.Server{
-		Addr:         ":3000",
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
-	}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/Join", n.handleJoinCluster)
-	mux.HandleFunc("/Leave", n.handleLeaveCluster)
-	mux.HandleFunc("/GetMessage", n.handleGetMessage)
-	mux.HandleFunc("/PostMessage", n.handlePostMessage)
+	// Start HTTP server for web client
+	log.Printf("start http called \n")
+	hs := NewHTTPTransport(":3000")
 
-	hs.Handler = mux
+	hs.mux.HandleFunc("/Join", n.handleJoinCluster)
+	hs.mux.HandleFunc("/Leave", n.handleLeaveCluster)
+	hs.mux.HandleFunc("/GetMessage", n.handleGetMessage)
+	hs.mux.HandleFunc("/PostMessage", n.handlePostMessage)
 
-	go hs.ListenAndServe()
+	go hs.StartServer()
 }
 
 func (n *Node) AddPeer(p *TCPPeer) {
@@ -541,11 +536,13 @@ func (n *Node) handleDeleteCoverReq(conn net.Conn, content *DeleteCoverReq) erro
 
 // HTTP handlers
 func (n *Node) handleJoinCluster(w http.ResponseWriter, req *http.Request) {
-	// call ND service to retrieve remote IP and join serf cluster
 
+	w.Write([]byte("This is the join handler \n"))
+
+	// call ND service to retrieve remote IP and join serf cluster
 	// establish tree formation
-	conn := n.ConnectTo(":3001")
-	n.QueryPath(conn)
+	// conn := n.ConnectTo(":3001")
+	// n.QueryPath(conn)
 	// n.ConnectPath(conn, n.paths)
 }
 
