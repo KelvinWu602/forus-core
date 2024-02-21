@@ -35,11 +35,6 @@ type Node struct {
 	addPeer    chan *TCPPeer
 	removePeer chan *TCPPeer
 	peerLock   sync.RWMutex
-
-	// Activity members
-	// TODO(@SauDoge) check period if all covers are alive, remove those that are not
-	// Callbacks?
-
 }
 
 // New() creates a new node
@@ -54,6 +49,23 @@ func New(addr string) *Node {
 
 	// TODO(@SauDoge): should be replaced by information returned by ND on localhost port 3200
 	// Currently pseudo
+
+	/*
+		nd := &NodeDiscoveryClient{}
+		nd.CreateClient()
+		resp, err := nd.GetMembers()
+		if err != nil {
+			log.Fatalf("Cannot get member from node discovery %s \n", err)
+		}
+
+		// iterate until the first alive member
+		for _, member := range resp.Member {
+			if member.Status == "alive" {
+				nd.JoinCluster(member.MembersIP)
+				break
+			}
+		}
+	*/
 
 	path := PathProfile{
 		uuid:        uuid.New(),
@@ -104,6 +116,7 @@ func (n *Node) StartTCP() {
 
 }
 
+// StartTCP() starts the HTTP server for client
 func (n *Node) StartHTTP() {
 	// Start HTTP server for web client
 	log.Printf("start http called \n")
@@ -201,6 +214,7 @@ func (n *Node) handleMessage(msg *DirectionalCM) error {
 	}
 }
 
+// Establish connection before any control messages
 func (n *Node) ConnectTo(addr string) net.Conn {
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
@@ -254,7 +268,6 @@ func (n *Node) ConnectPath(conn net.Conn, treeID uuid.UUID, n3X DHKeyExchange) {
 		},
 	}
 	gob.NewEncoder(conn).Encode(connectPathReq)
-
 }
 
 // TODO(@SauDoge) request a proxy triggered by empty path in pathResp
@@ -300,11 +313,74 @@ func (n *Node) MoveUp(conn net.Conn, uuid0 uuid.UUID) {
 
 }
 
+// These should be triggered by HTTP
+func (n *Node) Publish(key string, message []byte) error {
+	// 1) Check if a) the node has connected to at least one path b) has at least k cover nodes
+	// 	If failed:  TODO (@SauDoge)
+	// 2) Do the symmetric decrypt and asym decrypt -> verify with the checksum
+	//	2.1) If successful: call IS.store(key, message) and wait for sometime before confirming with IS
+	// 		2.1.1) If key exists in IS: return nil as no error
+	// 		2.1.2) If key does not exist: return error as publishing failed
+	// 	2.2) If failed: send to next node in the path with the asym decrypt the same and sym decrypt renewed
+
+	return nil
+}
+
+func (n *Node) Read(key string) ([]byte, error) {
+	// call IS.Read(key) and return the content
+	return []byte(""), nil
+}
+
+func (n *Node) GetPaths() []PathProfile {
+	result := []PathProfile{}
+	for _, val := range n.paths {
+		result = append(result, val)
+	}
+	return result
+}
+
+func (n *Node) VerifyCover(coverIP string) bool {
+	_, ok := n.covers[coverIP]
+	return ok
+}
+
+func (n *Node) AddProxyRole() (bool, error) {
+	// 1) if total number of cover nodes reach maximum, return false, error
+	// 2) status check on IS
+	// 	2.1) if failed: return false, error
+	// 	2.2) if success: create a new pathProfile and add to n.paths
+	// 		2.2.1) return true, nil
+	return false, errors.New("unimplemented error")
+}
+
+func (n *Node) AddCover(coverIP string, treeUUID uuid.UUID, secret []byte) bool {
+	// 1) if total number of cover nodes reach maximum, return false
+	// 2) create new cover mapping and add to n.covers
+	// 3) wait for cover message from this new cover for k minute
+	// 	3.1) if failed: call DeleteCover()
+	// 	3.2) if success: return true
+
+	return false
+}
+
+func (n *Node) DeleteCover(coverIP string) {
+	delete(n.covers, coverIP)
+}
+
+func (n *Node) Forward(message []byte) error {
+	// 1) sym decrypt and check the first byte
+	// 	1.1) if byte = 0: cover message and send to next path
+	//  1.2) if byte = 1: asym decrypt and check correctness of checksum
+	//		1.2.1) if correct: publish and return nil
+	// 		1.2.2) if wrong: return error corrupted message
+	return errors.New("unimplemented error")
+}
+
 func (n *Node) handleQueryPathReq(conn net.Conn, content *QueryPathReq) error {
 	// TODO: receive a public key and store somewhere
 
 	// send response with QueryPathResp
-	// how do Node know which conn to send to?
+	// how do Node know which conn to send to?x
 	// there should be someway to maintain the conn
 
 	queryPathResponse := ControlMessage{
@@ -425,7 +501,6 @@ func (n *Node) handleVerifyCoverResp(conn net.Conn, content *VerifyCoverResp) er
 		n.halfOpenPath = PathProfile{}
 		return nil
 	}
-
 }
 
 func (n *Node) handleConnectPathReq(conn net.Conn, content *ConnectPathReq) error {
@@ -537,9 +612,9 @@ func (n *Node) handleDeleteCoverReq(conn net.Conn, content *DeleteCoverReq) erro
 // HTTP handlers
 func (n *Node) handleJoinCluster(w http.ResponseWriter, req *http.Request) {
 
-	w.Write([]byte("This is the join handler \n"))
+	w.Write([]byte("This is the join handler \n")) // PLACEHOLDER TO BE REMOVED
+	// 1) call ND service to retrieve remote IP and join serf cluster
 
-	// call ND service to retrieve remote IP and join serf cluster
 	// establish tree formation
 	// conn := n.ConnectTo(":3001")
 	// n.QueryPath(conn)
@@ -547,8 +622,7 @@ func (n *Node) handleJoinCluster(w http.ResponseWriter, req *http.Request) {
 }
 
 func (n *Node) handleLeaveCluster(w http.ResponseWriter, req *http.Request) {
-	// remove from tree
-
+	// remove from tree profile
 	// call ND to leave serf cluster
 }
 
@@ -557,6 +631,6 @@ func (n *Node) handleGetMessage(w http.ResponseWriter, req *http.Request) {
 }
 
 func (n *Node) handlePostMessage(w http.ResponseWriter, req *http.Request) {
-	// call forward
+	// call Forward()
 
 }
