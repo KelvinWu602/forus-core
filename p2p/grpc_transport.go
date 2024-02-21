@@ -16,13 +16,14 @@ const (
 )
 
 type NodeDiscoveryClient struct {
-	client protos.NodeDiscoveryClient
+	client  protos.NodeDiscoveryClient
+	members []string
 }
 
 type ImmutableStorageClient struct {
 }
 
-func (nc *NodeDiscoveryClient) CreateClient() {
+func (nc *NodeDiscoveryClient) New() {
 	conn, err := grpc.Dial(NDAddr)
 	if err != nil {
 		log.Fatalf("Dial grpc failed %s \n", err)
@@ -47,4 +48,17 @@ func (nc *NodeDiscoveryClient) GetMembers() (*protos.GetMembersReponse, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return nc.client.GetMembers(ctx, &protos.GetMembersRequest{})
+}
+
+func initNodeDiscoverClient() *NodeDiscoveryClient {
+	nd := &NodeDiscoveryClient{}
+	nd.New()
+	resp, err := nd.GetMembers()
+	if err != nil {
+		log.Fatalf("Cannot get member from node discovery %s \n", err)
+	}
+
+	// iterate until the first alive member
+	nd.members = resp.Member
+	return nd
 }
