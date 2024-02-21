@@ -1,107 +1,107 @@
 package p2p
 
 import (
+	"encoding/gob"
 	"log"
 	"net"
-	"sync"
-
-	"github.com/KelvinWu602/forus-core/p2p"
 )
 
-// TCPNode represents the remote node over a TCP connection
-// A node should be capable to Dial and Accept simutaneously
-
-// Should peer and node be the same?
 type TCPPeer struct {
-	// conn is the underlying connection
-	conn net.Conn
-
-	// true = self dial peer
-	// false = peer dial self
-	outbound bool
+	conn       net.Conn
+	outbound   bool // true: self dial peer; false: peer dial self
+	listenAddr string
 }
 
+// if outbound == false, conn is the peer's sending-end
+// 	we also need to know peer's recv-end to send msg to it
+// 	it is always the address at port 3001
+// if outbound == true, conn is the peer's recv-end
+// listenAddr will be written during the handshake
 func NewTCPPeer(conn net.Conn, outbound bool) *TCPPeer {
 	return &TCPPeer{
 		conn:     conn,
 		outbound: outbound,
+		// listenAddr: conn.RemoteAddr().String(),
 	}
-
 }
 
-type TCPTransportConfig struct {
+func (p *TCPPeer) Close() error {
+	return p.conn.Close()
+}
+
+// Send() to the peer's recv-end i.e. if outbound == true
+// If outbound is false?
+func (p *TCPPeer) Send(b []byte) error {
+	_, err := p.conn.Write(b)
+	return err
+}
+
+// Readloop is a loop that receives all messages from a peer
+// Decode them
+// Then send to the message channel
+
+// also need to tell the node which peer it is
+// instead of having a control message channel, need something extra
+func (p *TCPPeer) ReadLoop(msgch chan *DirectionalCM) {
+	for {
+
+		msg := new(ControlMessage)
+		err := gob.NewDecoder(p.conn).Decode(msg)
+		log.Printf("%s receives a message of type %s \n", p.conn.LocalAddr(), msg.ControlType)
+		if err != nil {
+			log.Fatalf("message received cannot be decoded to a control message \n")
+			break
+		}
+
+		directionalCM := &DirectionalCM{
+			p:  p,
+			cm: msg,
+		}
+
+		msgch <- directionalCM
+	}
+	// TODO: need to unregister this peer
+	log.Printf("closing to readloop()")
+	p.Close()
 }
 
 type TCPTransport struct {
-	listenAddress string
-	listener      net.Listener
-
-	// config is the user defined metrics as yaml file
-	config TCPTransportConfig
-	// decoder is to identify which control message it is
-	decoder Decoder
-
-	mu    sync.RWMutex
-	peers map[net.Addr]Peer
+	listenAddr string
+	listener   net.Listener
+	AddPeer    chan *TCPPeer
+	RemovePeer chan *TCPPeer
 }
 
-func NewTCPTransport(listenAddr string) *TCPTransport {
+func NewTCPTransport(addr string) *TCPTransport {
 	return &TCPTransport{
-		listenAddress: listenAddr,
-		decoder:       p2p.GOBDecoder{},
+		listenAddr: addr,
 	}
 }
 
 func (t *TCPTransport) ListenAndAccept() error {
-
-	var err error
-
-	// Init listening
-	t.listener, err = net.Listen("tcp", t.listenAddress)
+	ln, err := net.Listen("tcp", t.listenAddr)
 	if err != nil {
-		log.Fatalln(err)
 		return err
 	}
 
-	// Loop to accept connections
-	go t.acceptLoop()
+	t.listener = ln
 
-	return nil
-}
+	log.Printf("server %s starts listening \n", ln.Addr().String())
 
-func (t *TCPTransport) acceptLoop() {
 	for {
-		conn, err := t.listener.Accept()
+		conn, err := ln.Accept()
 		if err != nil {
-			log.Fatalf("tcp accept error: %s \n", err)
+			log.Fatalf("listener cannot accept conn: %s \n", err)
 			continue
 		}
 
-		go t.handleConn(conn)
-	}
-}
-
-func (t *TCPTransport) handleConn(conn net.Conn) {
-
-	peer := NewTCPPeer(conn, true)
-	log.Printf("new incoming conection %+v \n ", peer)
-
-	// Make a buffer to hold incoming data.
-	// The incoming data is encrypted = 1460 bytes
-	buf := make([]byte, 1460)
-
-	// Read the incoming message into the buffer
-	// A loop for continuous reading
-	for {
-		if err := t.decoder.Decode(conn, "a"); err != nil {
-			// if failed to decode control message
-			log.Fatalf(("message cannot be decoded \n"))
-			continue
+		peer := &TCPPeer{
+			conn:     conn,
+			outbound: false,
 		}
-		mss_length, err := conn.Read(buf)
-		if err != nil {
-			log.Fatalf("error reading message with length %d: %s \n", mss_length, err)
-		}
-	}
 
+		t.AddPeer <- peer
+
+		log.Printf("server %s recv conn from %s \n", conn.LocalAddr().String(), conn.RemoteAddr().String())
+	}
 }

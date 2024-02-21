@@ -1,17 +1,37 @@
 package p2p
 
 import (
-	"crypto/ecdsa"
-	"net"
+	"crypto/rsa"
 
 	"github.com/google/uuid"
 )
 
+// Message is actual message that will show up on frontend
+type Message struct {
+	content string
+}
+
+type DirectionalCM struct {
+	p  *TCPPeer
+	cm *ControlMessage
+}
+
 // every message starts with a control type to indicate what kind of handshake message they are
+type ControlMessage struct {
+	// ControlType [16]byte
+	ControlType    string
+	ControlContent any
+}
 
 type QueryPathReq struct {
-	ControlType       [16]byte // in string = 16 * a
-	IncomingPublicKey ecdsa.PublicKey
+	N3PublicKey rsa.PublicKey
+}
+
+type Path struct {
+	TreeUUID       uuid.UUID
+	NextHop        string
+	NextNextHop    string
+	ProxyPublicKey rsa.PublicKey
 }
 type QueryPathResp struct {
 	// return
@@ -20,17 +40,12 @@ type QueryPathResp struct {
 	// 3) IP address of next hop
 	// 4) IP address of next-next-hop
 	// 5) proxy's public key
-	ControlType    [16]byte
-	NodePublicKey  ecdsa.PublicKey
-	TreeUUID       uuid.UUID
-	NextHop        net.IP
-	NextNextHop    net.IP
-	ProxyPublicKey ecdsa.PublicKey
+	NodePublicKey rsa.PublicKey
+	Paths         []Path
 }
 
 type VerifyCoverReq struct {
-	ControlType [16]byte
-	NextHop     net.IP
+	NextHop string
 }
 
 type VerifyCoverResp struct {
@@ -38,31 +53,35 @@ type VerifyCoverResp struct {
 }
 
 type ConnectPathReq struct {
-	ControlType [16]byte
-	TreeUUID    uuid.UUID
-	ReqPublic   ecdsa.PublicKey
+	TreeUUID       uuid.UUID
+	ReqKeyExchange DHKeyExchange
 }
 
 type ConnectPathResp struct {
-	RespPublic ecdsa.PublicKey
+	Status          bool
+	RespKeyExchange DHKeyExchange
 }
 
 type CreateProxyReq struct {
-	ControlType [16]byte
+	ReqKeyExchange DHKeyExchange
+	ReqPublicKey   rsa.PublicKey
 }
 
 type CreateProxyResp struct {
+	Status          bool
+	RespKeyExchange DHKeyExchange
+	N1Public        rsa.PublicKey
+	TreeUUID        uuid.UUID
 }
 
 type DeleteCoverReq struct {
-	ControlType [16]byte
+	Status bool
 }
 
 type DeleteCoverResp struct {
 }
 
 type ForwardReq struct {
-	ControlType [16]byte
 }
 
 type ForwardResp struct {
