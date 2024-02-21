@@ -54,6 +54,8 @@ func MakeServerAndStart(addr string) {
 		}
 	}
 
+	// TODO(@SauDoge) Periodic Cover Message
+
 }
 
 // New() creates a new node
@@ -307,15 +309,19 @@ func (n *Node) formTree(addr string) bool {
 	verified := <-n.isVerified
 	if verified {
 		n.ConnectPath(conn, n.halfOpenPath.uuid, n.keyExchange)
+	} else {
+		return false
 	}
 	connected := <-n.isConnected
 	return connected
 }
 
-// TODO(@SauDoge)These should be triggered by HTTP
+// TODO(@SauDoge)
 func (n *Node) Publish(key string, message []byte) error {
 	// 1) Check if a) the node has connected to at least one path b) has at least k cover nodes
-	// 	If failed:  TODO (@SauDoge)
+	if len(n.covers) < 10 || len(n.paths) < 1 {
+		return errors.New("publishing condition not met")
+	}
 	// 2) Do the symmetric decrypt and asym decrypt -> verify with the checksum
 	//	2.1) If successful: call IS.store(key, message) and wait for sometime before confirming with IS
 	// 		2.1.1) If key exists in IS: return nil as no error
@@ -328,6 +334,7 @@ func (n *Node) Publish(key string, message []byte) error {
 // TODO(@SauDoge)
 func (n *Node) Read(key string) ([]byte, error) {
 	// call IS.Read(key) and return the content
+
 	return []byte(""), nil
 }
 
@@ -560,6 +567,7 @@ func (n *Node) handleConnectPathResp(conn net.Conn, content *ConnectPathResp) er
 	return nil
 }
 
+// TODO(@SauDoge) 1) access IS 2) change to real from pseudo IPFS IP
 func (n *Node) handleCreateProxyReq(conn net.Conn, content *CreateProxyReq) error {
 	// TODO(@SauDoge) 1) access IS
 
@@ -597,6 +605,7 @@ func (n *Node) handleCreateProxyReq(conn net.Conn, content *CreateProxyReq) erro
 	return nil
 }
 
+// TODO(@SauDoge) change to real from pseudo IPFS IP,
 func (n *Node) handleCreateProxyResp(conn net.Conn, content *CreateProxyResp) error {
 
 	secretKey := content.RespKeyExchange.GetSymKey(n.publicKey)
@@ -608,6 +617,8 @@ func (n *Node) handleCreateProxyResp(conn net.Conn, content *CreateProxyResp) er
 		symKey:      secretKey,
 		proxyPublic: content.N1Public,
 	}
+
+	n.isConnected <- true
 
 	return nil
 }

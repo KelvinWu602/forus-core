@@ -46,6 +46,7 @@ func encryptAES(key SecretKey, plaintext string) (string, error) {
 
 }
 
+// symmetric decryption
 func decryptAES(key SecretKey, ciphertext []byte) ([]byte, error) {
 	iv := "my16digitIvKey12"
 	block, err := aes.NewCipher(key)
