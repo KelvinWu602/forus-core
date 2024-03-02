@@ -1,3 +1,5 @@
+github.com/KelvinWu602/immutable-storage v0.0.0 h1:XEvV1rkARGBUnqtc7pr0BDN2NlUxh0pvGoNde5QilPk=
+github.com/KelvinWu602/immutable-storage v0.0.0/go.mod h1:1s2TQfs0feZZO7E3D7c5cS/SGgeVfy3Ko+FrsdVZMT4=
 github.com/KelvinWu602/node-discovery v1.0.3 h1:rXbvIyOIGbgwKO5E3dyNaTia+Um5r9K826LJyGmOmFQ=
 github.com/KelvinWu602/node-discovery v1.0.3/go.mod h1:9/D11M9YFmx2/8y6T9ezJDNpYKkNQyeYXgEVGkcd8ps=
 github.com/golang/protobuf v1.5.0/go.mod h1:FsONVRAS9T7sI+LIUmWTfcYkHO4aIWwzhcaSAoJOfIk=
