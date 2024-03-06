@@ -8,7 +8,8 @@ import (
 
 // Message is actual message that will show up on frontend
 type Message struct {
-	content string
+	id      int
+	content []byte
 }
 
 type DirectionalCM struct {

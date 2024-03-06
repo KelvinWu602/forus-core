@@ -3,6 +3,7 @@ package p2p
 import (
 	"crypto/rsa"
 	"encoding/gob"
+	"encoding/json"
 	"errors"
 	"log"
 	"net"
@@ -38,7 +39,7 @@ type Node struct {
 
 	// grpc member
 	ndClient NodeDiscoveryClient
-	// isClient ImmutableStorageClient
+	isClient ImmutableStorageClient
 }
 
 func MakeServerAndStart(addr string) {
@@ -66,6 +67,7 @@ func New(addr string) *Node {
 	public, private := generateAsymmetricKey()
 
 	nd := initNodeDiscoverClient()
+	is := initImmutableStorageClient()
 	// Tree Formation is delayed until the start of TCP server first to receive CM resp
 	tr := NewTCPTransport(addr)
 
@@ -88,7 +90,7 @@ func New(addr string) *Node {
 	tr.RemovePeer = self.removePeer
 
 	self.ndClient = *nd
-
+	self.isClient = *is
 	return self
 }
 
@@ -635,29 +637,95 @@ func (n *Node) handleDeleteCoverReq(conn net.Conn, content *DeleteCoverReq) erro
 // ****************
 // TODO(@SauDoge)
 func (n *Node) handleJoinCluster(w http.ResponseWriter, req *http.Request) {
+	// 1) If the node already in the cluster, return already in cluster
+	if n.paths != nil {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("Already joined a cluster"))
+	} else {
+		// 2) If the node not in the cluster specified, do tree formation with the cluster
+		err := json.NewDecoder(req.Body)
+		var targetIP []byte
+		if err != nil {
+			log.Fatalf("target IP not found: %s \n", targetIP)
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte("Cannot identify target IP"))
+		} else {
+			n.formTree(string(targetIP))
+		}
+	}
 
-	w.Write([]byte("This is the join handler \n")) // PLACEHOLDER TO BE REMOVED
-	// 1) call ND service to retrieve remote IP and join serf cluster
-
-	// establish tree formation
-	// conn := n.ConnectTo(":3001")
-	// n.QueryPath(conn)
-	// n.ConnectPath(conn, n.paths)
 }
 
 // TODO(@SauDoge)
 func (n *Node) handleLeaveCluster(w http.ResponseWriter, req *http.Request) {
-	// remove from tree profile
-	// call ND to leave serf cluster
+	// 1) If the node not in the cluster, return already left
+	if n.paths == nil {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("Already left a cluster"))
+	} else {
+		// 2) If the node is in the cluster, leave tree and update profile
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("Leave a cluster"))
+	}
+
 }
 
-// TODO(@SauDoge)
+// DONE(@SauDoge)
 func (n *Node) handleGetMessage(w http.ResponseWriter, req *http.Request) {
-	// call IS
+	// 0) If the queryString is in the wrong format, REJECT
+	query := req.URL.Query()
+	keys := query["keys"]
+	if len(keys) == 0 || keys == nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("The keys are empty"))
+		return
+	} else {
+		keyContentPair := make(map[string]string)
+		for _, v := range keys {
+			// 1) Call IS IsDiscovered
+			resp, err := n.isClient.Read([]byte(v))
+			if err != nil {
+				log.Fatalf("No such message exist: %s \n", err)
+			}
+			if resp.Content != nil {
+				// 2) If message exists in IS, return to request
+				keyContentPair[v] = string(resp.Content)
+			} else {
+				// 3) If message does not exist, return ???
+				keyContentPair[v] = ""
+			}
+
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		// return a json that state which
+		json.NewEncoder(w).Encode(keyContentPair)
+		return
+	}
+
 }
 
-// TODO(@SauDoge)
+// TODO(@SauDoge): Forward Implementation locked
 func (n *Node) handlePostMessage(w http.ResponseWriter, req *http.Request) {
-	// call Forward()
+	decoder := json.NewDecoder(req.Body)
+	var message Message
+	err := decoder.Decode(&message)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("Request Body not formatted correctly \n"))
+	} else {
+		// 1) call Forward()
+		err := n.Forward(nil)
+
+		if err != nil {
+			// 3) If forward failed, return failed
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte("Posting failed on backend. Please try again. \n"))
+		} else {
+			// 2) If forward successful, return success
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("Message posted successfully.\n"))
+		}
+	}
 
 }
