@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -324,12 +325,34 @@ func (n *Node) Publish(key string, message []byte) error {
 	if len(n.covers) < 10 || len(n.paths) < 1 {
 		return errors.New("publishing condition not met")
 	}
-	// 2) Do the symmetric decrypt and asym decrypt -> verify with the checksum
-	//	2.1) If successful: call IS.store(key, message) and wait for sometime before confirming with IS
+	//	2.1)call IS.store(key, message) and wait for sometime before confirming with IS
 	// 		2.1.1) If key exists in IS: return nil as no error
 	// 		2.1.2) If key does not exist: return error as publishing failed
 	// 	2.2) If failed: send to next node in the path with the asym decrypt the same and sym decrypt renewed
 
+	resp, _ := n.isClient.Store([]byte(key), message)
+	if resp.Success {
+		// check with is if the key exists
+		keyCheckNoti := make(chan error, 1)
+		go func() {
+			time.Sleep(10 * time.Second)
+			// search key
+			discoveredResp, _ := n.isClient.IsDiscovered([]byte(key))
+			if discoveredResp.IsDiscovered {
+				keyCheckNoti <- nil
+			} else {
+				keyCheckNoti <- errors.New("publishing failed")
+			}
+		}()
+		select {
+		case keyCheck := <-keyCheckNoti:
+			return keyCheck
+		case <-time.After(15 * time.Second):
+			return errors.New("publishing failed")
+		}
+	} else {
+		return errors.New("Store failed")
+	}
 	return nil
 }
 
