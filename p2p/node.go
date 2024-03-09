@@ -333,11 +333,9 @@ func (n *Node) Publish(key string, message []byte) error {
 	return nil
 }
 
-// TODO(@SauDoge)
 func (n *Node) Read(key string) ([]byte, error) {
-	// call IS.Read(key) and return the content
-
-	return []byte(""), nil
+	resp, err := n.isClient.Read([]byte(key))
+	return resp.Content, err
 }
 
 func (n *Node) GetPaths() []PathProfile {
@@ -379,13 +377,51 @@ func (n *Node) DeleteCover(coverIP string) {
 }
 
 // TODO(@SauDoge)
-func (n *Node) Forward(message []byte) error {
+func (n *Node) Forward(message []byte, path PathProfile) error {
 	// 1) sym decrypt and check the first byte
 	// 	1.1) if byte = 0: cover message and send to next path
 	//  1.2) if byte = 1: asym decrypt and check correctness of checksum
 	//		1.2.1) if correct: publish and return nil
-	// 		1.2.2) if wrong: return error corrupted message
-	return errors.New("unimplemented error")
+	// 		1.2.2) if wrong: forward to the next path
+
+	asymmetricEncryptedContent, isReal, err := symmetricDecrypt(message, path.symKey)
+	if err != nil {
+		return err
+	}
+	if isReal {
+		// asym decryption
+		paddedContent, err := asymmetricDecrypt(asymmetricEncryptedContent, &n.privateKey)
+		if err != nil {
+			return err
+		}
+		if paddedContent != nil {
+			// remove salt from paddedContent and publish
+			return n.Publish("placeholder", asymmetricEncryptedContent)
+		} else {
+			// send the asymmetricEncryptedContent to the next path
+			var encryptedMsg []byte
+			if isReal {
+				encryptedMsg, _, _ = symmetricEncrypt(asymmetricEncryptedContent, n.covers[path.next].secretKey, [1]byte{1})
+			} else {
+				encryptedMsg, _, _ = symmetricEncrypt(asymmetricEncryptedContent, n.covers[path.next].secretKey, [1]byte{0})
+			}
+			dest := n.peers[path.next].conn
+			gob.NewEncoder(dest).Encode(encryptedMsg)
+
+		}
+	} else {
+		// cover message and send to next path
+		// find the conn of the next in path
+		var encryptedMsg []byte
+		if isReal {
+			encryptedMsg, _, _ = symmetricEncrypt(asymmetricEncryptedContent, n.covers[path.next].secretKey, [1]byte{1})
+		} else {
+			encryptedMsg, _, _ = symmetricEncrypt(asymmetricEncryptedContent, n.covers[path.next].secretKey, [1]byte{0})
+		}
+		dest := n.peers[path.next].conn
+		gob.NewEncoder(dest).Encode(encryptedMsg)
+	}
+	return nil
 }
 
 // ****************
@@ -715,7 +751,7 @@ func (n *Node) handlePostMessage(w http.ResponseWriter, req *http.Request) {
 		w.Write([]byte("Request Body not formatted correctly \n"))
 	} else {
 		// 1) call Forward()
-		err := n.Forward(nil)
+		err := n.Forward(nil, PathProfile{})
 
 		if err != nil {
 			// 3) If forward failed, return failed
