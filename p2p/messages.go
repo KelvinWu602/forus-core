@@ -2,38 +2,48 @@ package p2p
 
 import (
 	"crypto/rsa"
+	"errors"
 
 	"github.com/google/uuid"
 )
 
-// Message is actual message that will show up on frontend
-type Message struct {
-	id      int
+type ProtocolMessageType uint
+
+const (
+	QueryPathRequest ProtocolMessageType = iota
+	QueryPathResponse
+
+	VerifyCoverRequest
+	VerifyCoverResponse
+
+	ConnectPathRequest
+	ConnectPathResponse
+
+	CreateProxyRequest
+	CreateProxyResponse
+
+	DeleteCoverRequest
+)
+
+// ApplicationMessage is the actual message whose publisher is intended to be hidden by the protocol.
+type ApplicationMessage struct {
+	key     int
 	content []byte
 }
 
-type DirectionalCM struct {
-	p  *TCPPeer
-	cm *ControlMessage
+// ProtocolMessage is the messages being sent to other nodes during the tree formation process.
+type ProtocolMessage struct {
+	Type    ProtocolMessageType
+	Content any
 }
 
-// every message starts with a control type to indicate what kind of handshake message they are
-type ControlMessage struct {
-	// ControlType [16]byte
-	ControlType    string
-	ControlContent any
-}
+// Below are different types of ProtocolMessage.
 
 type QueryPathReq struct {
-	N3PublicKey rsa.PublicKey
+	// The public key of the request sender node.
+	PublicKey rsa.PublicKey
 }
 
-type Path struct {
-	TreeUUID       uuid.UUID
-	NextHop        string
-	NextNextHop    string
-	ProxyPublicKey rsa.PublicKey
-}
 type QueryPathResp struct {
 	// return
 	// 1) node's public key
@@ -45,6 +55,13 @@ type QueryPathResp struct {
 	Paths         []Path
 }
 
+type Path struct {
+	TreeUUID       uuid.UUID // TODO: should be Tree UUID encrypted with requester's PublicKey, ie. Public Key in QueryPath Request struct
+	NextHop        string
+	NextNextHop    string
+	ProxyPublicKey rsa.PublicKey
+}
+
 type VerifyCoverReq struct {
 	NextHop string
 }
@@ -54,36 +71,34 @@ type VerifyCoverResp struct {
 }
 
 type ConnectPathReq struct {
-	TreeUUID       uuid.UUID
-	ReqKeyExchange DHKeyExchange
+	TreeUUID    uuid.UUID // TODO: should be Tree UUID encrypted with receiver's PublicKey, ie. Public Key in QueryPath Response struct
+	KeyExchange DHKeyExchange
 }
 
 type ConnectPathResp struct {
-	Status          bool
-	RespKeyExchange DHKeyExchange
+	Status      bool // Since the same node cannot connect to self twice, it is possible that the request handler reject a request.
+	KeyExchange DHKeyExchange
 }
 
 type CreateProxyReq struct {
-	ReqKeyExchange DHKeyExchange
-	ReqPublicKey   rsa.PublicKey
+	KeyExchange DHKeyExchange
+	PublicKey   rsa.PublicKey
 }
 
 type CreateProxyResp struct {
-	Status          bool
-	RespKeyExchange DHKeyExchange
-	N1Public        rsa.PublicKey
-	TreeUUID        uuid.UUID
+	Status      bool
+	KeyExchange DHKeyExchange
+	Public      rsa.PublicKey
+	TreeUUID    uuid.UUID // TODO: should be Tree UUID encrypted with requester's PublicKey, ie. Public Key in CreateProxy Request struct
 }
 
 type DeleteCoverReq struct {
-	Status bool
 }
 
-type DeleteCoverResp struct {
-}
-
-type ForwardReq struct {
-}
-
-type ForwardResp struct {
+func CastProtocolMessage[output any](raw any, targetType ProtocolMessageType) (*output, error) {
+	if output, castSuccess := raw.(output); castSuccess {
+		return &output, nil
+	} else {
+		return nil, errors.New("CastProtocolMessage Error")
+	}
 }

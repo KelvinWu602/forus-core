@@ -63,34 +63,45 @@ func decryptAES(key SecretKey, ciphertext []byte) ([]byte, error) {
 
 }
 
+// G, P, HalfKey are all safe to leak to middle man.
+// But mySecret must be kept to the node only and never exposed to anyone.
 type DHKeyExchange struct {
-	G      big.Int
-	P      big.Int
-	Secret big.Int
+	G       big.Int
+	P       big.Int
+	HalfKey big.Int
 }
 
-func NewKeyExchange(a rsa.PublicKey) DHKeyExchange {
+func RandomBigInt(numOfBytes int) *big.Int {
+	// TODO: figure out how many bit is required
+	randomInt := new(big.Int)
+	randomBytes := make([]byte, numOfBytes)
 
+	rand.Read(randomBytes)
+	randomInt.SetBytes(randomBytes)
+	return randomInt
+}
+
+func NewKeyExchange(mySecret big.Int) DHKeyExchange {
 	g, _ := rand.Prime(rand.Reader, 4)
 	p, _ := rand.Prime(rand.Reader, 4)
 	for g == p {
 		p, _ = rand.Prime(rand.Reader, 4)
 	}
 	return DHKeyExchange{
-		G:      *g,
-		P:      *p,
-		Secret: *big.NewInt(0).Exp(g, a.N, p),
+		G:       *g,
+		P:       *p,
+		HalfKey: *big.NewInt(0).Exp(g, &mySecret, p),
 	}
 }
 
-func (dh *DHKeyExchange) GenerateReturn(b rsa.PublicKey) DHKeyExchange {
+func (dh *DHKeyExchange) GenerateReturn(mySecret big.Int) DHKeyExchange {
 	return DHKeyExchange{
-		G:      dh.G,
-		P:      dh.P,
-		Secret: *big.NewInt(0).Exp(&dh.G, b.N, &dh.P),
+		G:       dh.G,
+		P:       dh.P,
+		HalfKey: *big.NewInt(0).Exp(&dh.G, &mySecret, &dh.P),
 	}
 }
 
-func (dh *DHKeyExchange) GetSymKey(b rsa.PublicKey) big.Int {
-	return *big.NewInt(0).Exp(&dh.G, b.N, &dh.P)
+func (dh *DHKeyExchange) GetSymKey(mySecret big.Int) big.Int {
+	return *big.NewInt(0).Exp(&dh.HalfKey, &mySecret, &dh.P)
 }
