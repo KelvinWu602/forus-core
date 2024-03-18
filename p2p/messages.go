@@ -4,6 +4,7 @@ import (
 	"crypto/rsa"
 	"errors"
 
+	"github.com/KelvinWu602/immutable-storage/blueprint"
 	"github.com/google/uuid"
 )
 
@@ -25,19 +26,50 @@ const (
 	DeleteCoverRequest
 )
 
-// ApplicationMessage is the actual message whose publisher is intended to be hidden by the protocol.
+type DataMessageType uint
+
+const (
+	Real DataMessageType = iota
+	Cover
+)
+
+// ******************
+// Application Messages
+// ******************
+
+// ApplicationMessage is the actual payload sent by sendCoverMessageWorker, publish, and forward.
 type ApplicationMessage struct {
-	key     int
-	content []byte
+	SymmetricEncryptedPayload []byte
 }
+
+// SymmetricEncryptDataMessage includes payload that have been encrypted by the target proxy's public key and type information.
+type SymmetricEncryptDataMessage struct {
+	Type                      DataMessageType
+	AsymetricEncryptedPayload []byte
+}
+
+// AsymetricEncryptDataMessage includes DataMessage and additional info to be asymmetric encrypted.
+type AsymetricEncryptDataMessage struct {
+	Data     DataMessage
+	Salt     [64]byte
+	Checksum [32]byte
+}
+
+// DataMessage is the actual message whose publisher is intended to be hidden by the protocol.
+type DataMessage struct {
+	Key     blueprint.Key
+	Content []byte
+}
+
+// ******************
+// Protocol Messages
+// ******************
 
 // ProtocolMessage is the messages being sent to other nodes during the tree formation process.
 type ProtocolMessage struct {
 	Type    ProtocolMessageType
 	Content any
 }
-
-// Below are different types of ProtocolMessage.
 
 type QueryPathReq struct {
 	// The public key of the request sender node.
