@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,11 +16,15 @@ import (
 
 type Node struct {
 	// Info members
-	paths      map[uuid.UUID]PathProfile
-	covers     map[string]CoverNodeProfile
-	publicKey  rsa.PublicKey
-	privateKey rsa.PrivateKey
-	// TODO(@SauDoge) make sure no future connection init by n connects to any paths of covers
+	paths       map[uuid.UUID]PathProfile
+	covers      map[string]CoverNodeProfile
+	publishJobs map[uuid.UUID]PublishJobProfile
+	publicKey   rsa.PublicKey
+	privateKey  rsa.PrivateKey
+
+	// Synchronization
+	publishJobsRWLock *sync.RWMutex // should acquire a Read lock whenever reading publishJobs content
+	coversRWLock      *sync.RWMutex // should acquire a Read lock whenever reading covers content
 
 	// Temp info members
 	// Is a lock needed?
@@ -64,10 +69,13 @@ func New(addr string) *Node {
 	// Tree Formation is delayed until the start of TCP server first to receive CM resp
 
 	self := &Node{
-		publicKey:  *public,
-		privateKey: *private,
-		paths:      make(map[uuid.UUID]PathProfile),
-		covers:     make(map[string]CoverNodeProfile),
+		publicKey:         *public,
+		privateKey:        *private,
+		paths:             make(map[uuid.UUID]PathProfile),
+		covers:            make(map[string]CoverNodeProfile),
+		publishJobs:       make(map[uuid.UUID]PublishJobProfile),
+		publishJobsRWLock: &sync.RWMutex{},
+		coversRWLock:      &sync.RWMutex{},
 	}
 
 	self.ndClient = *nd
