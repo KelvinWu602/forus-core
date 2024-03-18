@@ -32,6 +32,18 @@ func (node *Node) markPublishJobStatus(jobID uuid.UUID, profile PublishJobProfil
 	node.publishJobs[jobID] = profile
 }
 
+func (node *Node) removeCoversProfile(coverIp string) {
+	node.coversRWLock.Lock()
+	defer node.coversRWLock.Unlock()
+	delete(node.covers, coverIp)
+}
+
+func (node *Node) removePathProfile(pathID uuid.UUID) {
+	node.pathsRWLock.Lock()
+	defer node.pathsRWLock.Unlock()
+	delete(node.paths, pathID)
+}
+
 // workers
 // ==========================================
 
@@ -76,44 +88,88 @@ func (node *Node) checkPublishJobStatusWorker(jobID uuid.UUID, timeout time.Dura
 	node.markPublishJobStatus(jobID, publishJobProfile)
 }
 
-// cleanDeadCoversWorker will remove cover nodes that have stopped sending cover messages from the local cover node profiles.
-func (node *Node) cleanDeadCoversWorker(cleanUpTimeout time.Duration, cleanUpInterval time.Duration) {
-	// forever running
+func (node *Node) sendCoverMessageWorker(ctx context.Context, conn net.Conn, interval time.Duration, pathID uuid.UUID) {
+	log.Printf("sendCoverMessageWorker to %s is started successfully.\n", conn.RemoteAddr().String())
+
+	encoder := gob.NewEncoder(conn)
+
+	doneSuccess := make(chan bool)
+	doneErr := make(chan error)
+	defer close(doneSuccess)
+	defer close(doneErr)
+
 	for {
-		now := time.Now()
-		// for each cover profile, check if current time has passed the lastCoverMessageTime by certain threshold
-		node.coversRWLock.Lock()
-		for coverIP, coverProfile := range node.covers {
-			if now.After(coverProfile.lastCoverMessageTimestamp.Add(cleanUpTimeout)) {
-				// the cover node is dead, clean it up
-				delete(node.covers, coverIP)
+		// TODO: send the cover message
+		go func() {
+			path := node.paths[pathID]
+			coverMsg, err := NewCoverMessage(path.proxyPublic, path.symKey)
+			if err != nil {
+				doneErr <- err
+				return
 			}
+			err = encoder.Encode(coverMsg)
+			if err != nil {
+				doneErr <- err
+			} else {
+				doneSuccess <- true
+			}
+		}()
+
+		// check if terminated
+		select {
+		case err := <-doneErr:
+			log.Printf("[Error]:sendCoverMessageWorker when sending cover message to %s: %v\n", conn.RemoteAddr().String(), err)
+			node.removePathProfile(pathID)
+			return
+		case <-ctx.Done():
+			node.removePathProfile(pathID)
+			log.Printf("sendCoverMessageWorker to %s is stopped successfully.\n", conn.RemoteAddr().String())
+			return
+		case <-doneSuccess:
+			time.Sleep(interval)
 		}
-		node.coversRWLock.Unlock()
-		time.Sleep(cleanUpInterval)
 	}
 }
 
-func (node *Node) sendCoverMessageWorker(ctx context.Context, conn net.Conn, interval time.Duration) {
-	log.Printf("sendCoverMessageWorker to %s is started successfully.\n", conn.RemoteAddr().String())
-	// TODO: create proper cover message
-	coverMsg := ApplicationMessage{
-		key:     123,
-		content: []byte{},
-	}
+func (node *Node) handleApplicationMessageWorker(ctx context.Context, conn net.Conn, maxInterval time.Duration) {
+	log.Printf("handleApplicationMessageWorker from %s is started successfully.\n", conn.RemoteAddr().String())
+
+	coverIp := conn.RemoteAddr().String()
+	decoder := gob.NewDecoder(conn)
+
+	doneSuccess := make(chan ApplicationMessage)
+	doneErr := make(chan error)
+	defer close(doneSuccess)
+	defer close(doneErr)
 
 	for {
-		// send the cover message
-		err := gob.NewEncoder(conn).Encode(coverMsg)
-		if err != nil {
-			log.Printf("[Error]:sendCoverMessageWorker when sending cover message to %s: %v\n", conn.RemoteAddr().String(), err)
-		}
-		time.Sleep(interval)
+		// TODO: expect application message to arrive
+		go func() {
+			msg := ApplicationMessage{}
+			err := decoder.Decode(&msg)
+			if err != nil {
+				log.Printf("[Error]:handleApplicationMessageWorker when receiving application message from %s: %v\n", conn.RemoteAddr().String(), err)
+				doneErr <- err
+			} else {
+				doneSuccess <- msg
+			}
+		}()
 
-		// check if terminated
-		if len(ctx.Done()) > 0 {
-			<-ctx.Done()
-			log.Printf("sendCoverMessageWorker to %s is stopped successfully.\n", conn.RemoteAddr().String())
+		select {
+		case msg := <-doneSuccess:
+			if err := node.handleApplicationMessage(msg, coverIp); err != nil {
+				log.Printf("[Error]:handleApplicationMessage: %v\n", err)
+			}
+		case err := <-doneErr:
+			log.Printf("handleApplicationMessageWorker from %s: RECEIVE ERROR: %v\n", conn.RemoteAddr().String(), err)
+			node.removeCoversProfile(coverIp)
+			return
+		case <-time.After(maxInterval):
+			log.Printf("handleApplicationMessageWorker from %s: COVER MESSAGE TIMEOUT.\n", conn.RemoteAddr().String())
+			node.removeCoversProfile(coverIp)
+			return
+		case <-ctx.Done():
+			log.Printf("handleApplicationMessageWorker from %s: CANCEL SIGNAL RECEIVED.\n", conn.RemoteAddr().String())
 			return
 		}
 	}

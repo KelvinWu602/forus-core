@@ -1,6 +1,7 @@
 package p2p
 
 import (
+	"bytes"
 	"crypto/rsa"
 	"encoding/gob"
 	"encoding/json"
@@ -23,13 +24,14 @@ type Node struct {
 	privateKey  rsa.PrivateKey
 
 	// Synchronization
+	pathsRWLock       *sync.RWMutex // should acquire a Read lock whenever reading paths content
 	publishJobsRWLock *sync.RWMutex // should acquire a Read lock whenever reading publishJobs content
 	coversRWLock      *sync.RWMutex // should acquire a Read lock whenever reading covers content
 
 	// Temp info members
 	// Is a lock needed?
 	halfOpenPath PathProfile
-	tempQueue    chan ApplicationMessage
+	tempQueue    chan DataMessage
 	isConnected  chan bool
 
 	// Internode Control members
@@ -461,7 +463,7 @@ func (n *Node) handleQueryPathReq(conn net.Conn, content *QueryPathReq) error {
 	enc := gob.NewEncoder(conn)
 	err := enc.Encode(protocolMessage)
 	if err != nil {
-		log.Println("something is wrong when sending encoded: %s \n", err)
+		log.Printf("something is wrong when sending encoded: %s \n", err)
 	}
 	return nil
 }
@@ -556,6 +558,70 @@ func (n *Node) handleDeleteCoverReq(conn net.Conn, content *DeleteCoverReq) erro
 }
 
 // ****************
+// TODO: Handlers for Application Messages, ie. real and cover message
+// ****************
+
+func (n *Node) handleApplicationMessage(rawMessage ApplicationMessage, coverIp string) error {
+	// TODO:
+	// 1. Symmetric Decrypt.
+	symmetricKey := n.covers[coverIp].secretKey
+	symOutput := rawMessage.SymmetricEncryptedPayload
+	symInputBytes, err := SymmetricDecrypt(symOutput, symmetricKey)
+	if err != nil {
+		return err
+	}
+	// 2. Decode Symmetric Input Bytes
+	symInput := SymmetricEncryptDataMessage{}
+	if err := gob.NewDecoder(bytes.NewBuffer(symInputBytes)).Decode(&symInput); err != nil {
+		return err
+	}
+	// 3. Check Type
+	switch symInput.Type {
+	case Cover:
+		n.postponeCoverTimeout(coverIp)
+		return nil
+	case Real:
+		return n.handleRealMessage(symInput.AsymetricEncryptedPayload)
+	default:
+		return errors.New("invalid data message type")
+	}
+}
+
+func (n *Node) postponeCoverTimeout(coverIP string) {
+	n.coversRWLock.Lock()
+	defer n.coversRWLock.Unlock()
+	profile := n.covers[coverIP]
+	profile.lastCoverMessageTimestamp = time.Now()
+	n.covers[coverIP] = profile
+}
+
+func (n *Node) handleRealMessage(asymOutput []byte) error {
+	priKey := n.privateKey
+	asymInputBytes, err := AsymmetricDecrypt(asymOutput, priKey)
+	if err != nil {
+		// Failed to decrypt
+		// Investigate the library behavior, see if wrong private key will throw error
+		return err
+	}
+	// Check if self is the proxy: check the checksum
+	asymInput := AsymetricEncryptDataMessage{}
+	err = gob.NewDecoder(bytes.NewBuffer(asymInputBytes)).Decode(&asymInput)
+	if err != nil {
+		return err
+	}
+	isProxy, err := asymInput.ValidateChecksum()
+	if err != nil {
+		return err
+	}
+	if isProxy {
+		// Store in ImmutableStorage
+	} else {
+		// Call Forward
+	}
+	return nil
+}
+
+// ****************
 // Handlers for http communication
 // ****************
 // TODO(@SauDoge)
@@ -631,7 +697,7 @@ func (n *Node) handleGetMessage(w http.ResponseWriter, req *http.Request) {
 // TODO(@SauDoge): Forward Implementation locked
 func (n *Node) handlePostMessage(w http.ResponseWriter, req *http.Request) {
 	decoder := json.NewDecoder(req.Body)
-	var message ApplicationMessage
+	var message DataMessage
 	err := decoder.Decode(&message)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
