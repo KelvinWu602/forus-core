@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -324,20 +325,40 @@ func (n *Node) Publish(key string, message []byte) error {
 	if len(n.covers) < 10 || len(n.paths) < 1 {
 		return errors.New("publishing condition not met")
 	}
-	// 2) Do the symmetric decrypt and asym decrypt -> verify with the checksum
-	//	2.1) If successful: call IS.store(key, message) and wait for sometime before confirming with IS
+	//	2.1)call IS.store(key, message) and wait for sometime before confirming with IS
 	// 		2.1.1) If key exists in IS: return nil as no error
 	// 		2.1.2) If key does not exist: return error as publishing failed
 	// 	2.2) If failed: send to next node in the path with the asym decrypt the same and sym decrypt renewed
 
+	resp, _ := n.isClient.Store([]byte(key), message)
+	if resp.Success {
+		// check with is if the key exists
+		keyCheckNoti := make(chan error, 1)
+		go func() {
+			time.Sleep(10 * time.Second)
+			// search key
+			discoveredResp, _ := n.isClient.IsDiscovered([]byte(key))
+			if discoveredResp.IsDiscovered {
+				keyCheckNoti <- nil
+			} else {
+				keyCheckNoti <- errors.New("publishing failed")
+			}
+		}()
+		select {
+		case keyCheck := <-keyCheckNoti:
+			return keyCheck
+		case <-time.After(15 * time.Second):
+			return errors.New("publishing failed")
+		}
+	} else {
+		return errors.New("Store failed")
+	}
 	return nil
 }
 
-// TODO(@SauDoge)
 func (n *Node) Read(key string) ([]byte, error) {
-	// call IS.Read(key) and return the content
-
-	return []byte(""), nil
+	resp, err := n.isClient.Read([]byte(key))
+	return resp.Content, err
 }
 
 func (n *Node) GetPaths() []PathProfile {
@@ -379,13 +400,51 @@ func (n *Node) DeleteCover(coverIP string) {
 }
 
 // TODO(@SauDoge)
-func (n *Node) Forward(message []byte) error {
+func (n *Node) Forward(message []byte, path PathProfile) error {
 	// 1) sym decrypt and check the first byte
 	// 	1.1) if byte = 0: cover message and send to next path
 	//  1.2) if byte = 1: asym decrypt and check correctness of checksum
 	//		1.2.1) if correct: publish and return nil
-	// 		1.2.2) if wrong: return error corrupted message
-	return errors.New("unimplemented error")
+	// 		1.2.2) if wrong: forward to the next path
+
+	asymmetricEncryptedContent, isReal, err := symmetricDecrypt(message, path.symKey)
+	if err != nil {
+		return err
+	}
+	if isReal {
+		// asym decryption
+		paddedContent, err := asymmetricDecrypt(asymmetricEncryptedContent, &n.privateKey)
+		if err != nil {
+			return err
+		}
+		if paddedContent != nil {
+			// remove salt from paddedContent and publish
+			return n.Publish("placeholder", asymmetricEncryptedContent)
+		} else {
+			// send the asymmetricEncryptedContent to the next path
+			var encryptedMsg []byte
+			if isReal {
+				encryptedMsg, _, _ = symmetricEncrypt(asymmetricEncryptedContent, n.covers[path.next].secretKey, [1]byte{1})
+			} else {
+				encryptedMsg, _, _ = symmetricEncrypt(asymmetricEncryptedContent, n.covers[path.next].secretKey, [1]byte{0})
+			}
+			dest := n.peers[path.next].conn
+			gob.NewEncoder(dest).Encode(encryptedMsg)
+
+		}
+	} else {
+		// cover message and send to next path
+		// find the conn of the next in path
+		var encryptedMsg []byte
+		if isReal {
+			encryptedMsg, _, _ = symmetricEncrypt(asymmetricEncryptedContent, n.covers[path.next].secretKey, [1]byte{1})
+		} else {
+			encryptedMsg, _, _ = symmetricEncrypt(asymmetricEncryptedContent, n.covers[path.next].secretKey, [1]byte{0})
+		}
+		dest := n.peers[path.next].conn
+		gob.NewEncoder(dest).Encode(encryptedMsg)
+	}
+	return nil
 }
 
 // ****************
@@ -715,7 +774,7 @@ func (n *Node) handlePostMessage(w http.ResponseWriter, req *http.Request) {
 		w.Write([]byte("Request Body not formatted correctly \n"))
 	} else {
 		// 1) call Forward()
-		err := n.Forward(nil)
+		err := n.Forward(nil, PathProfile{})
 
 		if err != nil {
 			// 3) If forward failed, return failed
