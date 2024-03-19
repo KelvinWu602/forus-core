@@ -2,27 +2,103 @@ package p2p
 
 import (
 	"bytes"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
 	"encoding/gob"
-	"io"
+	"math/big"
+
+	"golang.org/x/exp/slices"
 )
 
-type Codec interface {
-	Decode(io.Reader, any) error
-	Encode(any) *bytes.Buffer
+// TODO: use the correct type in input
+func NewCoverMessage(proxyPublicKey rsa.PublicKey, symmetricKey big.Int) (*ApplicationMessage, error) {
+	key := [48]byte{}
+	rand.Read(key[:])
+	content := [1024]byte{}
+	dm := DataMessage{
+		Key:     key,
+		Content: content[:],
+	}
+	asymInput, err := dm.CreateAsymmetricEncryptionInput()
+	if err != nil {
+		return nil, err
+	}
+	asymInputBytes, err := asymInput.ToBytes()
+	if err != nil {
+		return nil, err
+	}
+	asymOutput, err := AsymmetricEncrypt(asymInputBytes, proxyPublicKey)
+	if err != nil {
+		return nil, err
+	}
+	symInput := SymmetricEncryptDataMessage{
+		Type:                      Cover,
+		AsymetricEncryptedPayload: asymOutput,
+	}
+	symInputBytes, err := symInput.ToBytes()
+	if err != nil {
+		return nil, err
+	}
+	symOutput, err := SymmetricEncrypt(symInputBytes, symmetricKey)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ApplicationMessage{
+		SymmetricEncryptedPayload: symOutput,
+	}, nil
 }
 
-// use gob to decode control message
-type GOBCodec struct {
+func (msg *DataMessage) CreateAsymmetricEncryptionInput() (*AsymetricEncryptDataMessage, error) {
+	salt := [64]byte{}
+	rand.Read(salt[:])
+
+	// Create result padded with zero checksum
+	result := AsymetricEncryptDataMessage{
+		Data:     *msg,
+		Salt:     salt,
+		Checksum: [32]byte{},
+	}
+
+	resultBytes, err := result.ToBytes()
+	if err != nil {
+		return nil, err
+	}
+
+	checksum := sha256.Sum256(resultBytes)
+	result.Checksum = checksum
+	return &result, nil
 }
 
-// r is the source
-// v is the type the source should be decoded to
-func (g GOBCodec) Decode(r io.Reader, v any) error {
-	return gob.NewDecoder(r).Decode(v)
+func (msg *AsymetricEncryptDataMessage) ValidateChecksum() (bool, error) {
+	duplicate := AsymetricEncryptDataMessage{
+		Data:     msg.Data,
+		Salt:     msg.Salt,
+		Checksum: [32]byte{},
+	}
+	duplicateBytes, err := duplicate.ToBytes()
+	if err != nil {
+		return false, err
+	}
+	calculatedChecksum := sha256.Sum256(duplicateBytes)
+	return slices.Equal(calculatedChecksum[:], msg.Checksum[:]), nil
 }
 
-func (g GOBCodec) Encode(v any) *bytes.Buffer {
-	buf := new(bytes.Buffer)
-	gob.NewEncoder(buf).Encode(v)
-	return buf
+func (msg *AsymetricEncryptDataMessage) ToBytes() ([]byte, error) {
+	buffer := bytes.Buffer{}
+	encoder := gob.NewEncoder(&buffer)
+	if err := encoder.Encode(msg); err != nil {
+		return nil, err
+	}
+	return buffer.Bytes(), nil
+}
+
+func (msg *SymmetricEncryptDataMessage) ToBytes() ([]byte, error) {
+	buffer := bytes.Buffer{}
+	encoder := gob.NewEncoder(&buffer)
+	if err := encoder.Encode(msg); err != nil {
+		return nil, err
+	}
+	return buffer.Bytes(), nil
 }
