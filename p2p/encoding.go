@@ -50,6 +50,38 @@ func NewCoverMessage(proxyPublicKey rsa.PublicKey, symmetricKey big.Int) (*Appli
 	}, nil
 }
 
+func NewRealMessage(dm DataMessage, proxyPublicKey rsa.PublicKey, symmetricKey big.Int) (*ApplicationMessage, error) {
+	asymInput, err := dm.CreateAsymmetricEncryptionInput()
+	if err != nil {
+		return nil, err
+	}
+	asymInputBytes, err := asymInput.ToBytes()
+	if err != nil {
+		return nil, err
+	}
+	asymOutput, err := AsymmetricEncrypt(asymInputBytes, proxyPublicKey)
+	if err != nil {
+		return nil, err
+	}
+	symInput := SymmetricEncryptDataMessage{
+		Type:                      Cover,
+		AsymetricEncryptedPayload: asymOutput,
+	}
+	symInputBytes, err := symInput.ToBytes()
+	if err != nil {
+		return nil, err
+	}
+	symOutput, err := SymmetricEncrypt(symInputBytes, symmetricKey)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ApplicationMessage{
+		SymmetricEncryptedPayload: symOutput,
+	}, nil
+
+}
+
 func (msg *DataMessage) CreateAsymmetricEncryptionInput() (*AsymetricEncryptDataMessage, error) {
 	salt := [64]byte{}
 	rand.Read(salt[:])

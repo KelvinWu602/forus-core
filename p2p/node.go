@@ -7,13 +7,18 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"math/rand"
 	"net"
 	"net/http"
 	"sync"
 	"time"
 
+	is "github.com/KelvinWu602/immutable-storage/blueprint"
 	"github.com/google/uuid"
 )
+
+// Global Variables
+var httpWg sync.WaitGroup // TODO(@SauDoge): Find the correct place to terminate this wg
 
 type Node struct {
 	// Info members
@@ -43,9 +48,9 @@ type Node struct {
 }
 
 func MakeServerAndStart(addr string) {
+
 	s := New(addr)
 	go s.StartTCP(addr)
-	go s.StartHTTP()
 
 	// TODO(@SauDoge): get into at least one path using tree formation
 	for _, member := range s.ndClient.members {
@@ -54,6 +59,10 @@ func MakeServerAndStart(addr string) {
 			break
 		}
 	}
+	// The HTTP server must start only after the tree formation is completed
+	httpWg.Add(1)
+	go s.StartHTTP()
+	httpWg.Wait()
 
 	// TODO(@SauDoge) Periodic Cover Message
 
@@ -94,12 +103,12 @@ func (n *Node) StartHTTP() {
 	log.Printf("start http called \n")
 	hs := NewHTTPTransport(":3000")
 
-	hs.mux.HandleFunc("/Join", n.handleJoinCluster)
-	hs.mux.HandleFunc("/Leave", n.handleLeaveCluster)
 	hs.mux.HandleFunc("/GetMessage", n.handleGetMessage)
 	hs.mux.HandleFunc("/PostMessage", n.handlePostMessage)
 
 	go hs.StartServer()
+
+	defer httpWg.Done()
 }
 
 // StartTCP() starts the internode communicating TCP
@@ -366,19 +375,59 @@ func (n *Node) formTree(addr string) bool {
 	return false
 }
 
-// TODO(@SauDoge)
-func (n *Node) Publish(key string, message []byte) error {
-	// 1) Check if a) the node has connected to at least one path b) has at least k cover nodes
+// TODO(@SauDoge): return the publishJobId should be enough, such that other function can simply check the map
+func (n *Node) Publish(key is.Key, message []byte) (uuid.UUID, error) {
+	// 1) Check tree formation status
+	// a) the node has connected to at least one path
+	// b) has at least k cover nodes
 	if len(n.covers) < 10 || len(n.paths) < 1 {
-		return errors.New("publishing condition not met")
+		return uuid.Nil, errors.New("publishing condition not met")
 	}
-	// 2) Do the symmetric decrypt and asym decrypt -> verify with the checksum
-	//	2.1) If successful: call IS.store(key, message) and wait for sometime before confirming with IS
-	// 		2.1.1) If key exists in IS: return nil as no error
-	// 		2.1.2) If key does not exist: return error as publishing failed
-	// 	2.2) If failed: send to next node in the path with the asym decrypt the same and sym decrypt renewed
+	// 2) Validate the key
+	isValdiated := is.ValidateKey(key, message)
+	if !isValdiated {
+		return uuid.Nil, errors.New("key not valid")
+	}
+	// 3) Pick a path
+	randomPathIdx := rand.Intn(len(n.paths))
+	var randomPathProfile PathProfile
+	for _, v := range n.paths {
+		if randomPathIdx == 0 {
+			// pick the path
+			randomPathProfile = v
+		} else {
+			randomPathIdx = randomPathIdx - 1
+		}
+	}
 
-	return nil
+	// 4) encrypt the data message to application message
+	dataMessage := DataMessage{Key: key, Content: message}
+	am, err := NewRealMessage(dataMessage, randomPathProfile.proxyPublic, randomPathProfile.symKey)
+	if err != nil {
+		return uuid.Nil, errors.New("encryption from data to application failed")
+	}
+
+	// 5) send the application message to the next hop
+	// TODO: mentions re-use conn but dont know where, need to find out
+	conn, err := net.Dial("tcp", randomPathProfile.next)
+	if err != nil {
+		return uuid.Nil, errors.New("error when dial tcp addr")
+	}
+	defer conn.Close()
+
+	err = gob.NewEncoder(conn).Encode(am)
+	if err != nil {
+		return uuid.Nil, errors.New("error when sending tcp request")
+	}
+
+	// 6) update the publishingJob map
+	n.publishJobsRWLock.Lock()
+	newJobID := uuid.New()
+	n.publishJobs[newJobID] = PublishJobProfile{Key: key[:], Status: PENDING}
+	n.publishJobsRWLock.Unlock()
+
+	// 7) return the publishJobID
+	return newJobID, nil
 }
 
 // TODO(@SauDoge)
@@ -624,40 +673,6 @@ func (n *Node) handleRealMessage(asymOutput []byte) error {
 // ****************
 // Handlers for http communication
 // ****************
-// TODO(@SauDoge)
-func (n *Node) handleJoinCluster(w http.ResponseWriter, req *http.Request) {
-	// 1) If the node already in the cluster, return already in cluster
-	if n.paths != nil {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("Already joined a cluster"))
-	} else {
-		// 2) If the node not in the cluster specified, do tree formation with the cluster
-		err := json.NewDecoder(req.Body)
-		var targetIP []byte
-		if err != nil {
-			log.Fatalf("target IP not found: %s \n", targetIP)
-			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte("Cannot identify target IP"))
-		} else {
-			n.formTree(string(targetIP))
-		}
-	}
-
-}
-
-// TODO(@SauDoge)
-func (n *Node) handleLeaveCluster(w http.ResponseWriter, req *http.Request) {
-	// 1) If the node not in the cluster, return already left
-	if n.paths == nil {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("Already left a cluster"))
-	} else {
-		// 2) If the node is in the cluster, leave tree and update profile
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("Leave a cluster"))
-	}
-
-}
 
 // DONE(@SauDoge)
 func (n *Node) handleGetMessage(w http.ResponseWriter, req *http.Request) {
@@ -675,7 +690,9 @@ func (n *Node) handleGetMessage(w http.ResponseWriter, req *http.Request) {
 			resp, err := n.isClient.Read([]byte(v))
 			if err != nil {
 				log.Fatalf("No such message exist: %s \n", err)
+				continue
 			}
+
 			if resp.Content != nil {
 				// 2) If message exists in IS, return to request
 				keyContentPair[v] = string(resp.Content)
@@ -704,7 +721,7 @@ func (n *Node) handlePostMessage(w http.ResponseWriter, req *http.Request) {
 		w.Write([]byte("Request Body not formatted correctly \n"))
 	} else {
 		// 1) call Forward()
-		err := n.Forward(nil)
+		_, err := n.Publish(message.Key, message.Content)
 
 		if err != nil {
 			// 3) If forward failed, return failed
@@ -716,5 +733,4 @@ func (n *Node) handlePostMessage(w http.ResponseWriter, req *http.Request) {
 			w.Write([]byte("Message posted successfully.\n"))
 		}
 	}
-
 }
