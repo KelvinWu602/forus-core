@@ -5,7 +5,6 @@ import (
 	"errors"
 
 	"github.com/KelvinWu602/immutable-storage/blueprint"
-	"github.com/google/uuid"
 )
 
 type ProtocolMessageType uint
@@ -79,7 +78,7 @@ type QueryPathReq struct {
 type QueryPathResp struct {
 	// return
 	// 1) node's public key
-	// 2) tree's UUID
+	// 2) encrypted tree's UUID
 	// 3) IP address of next hop
 	// 4) IP address of next-next-hop
 	// 5) proxy's public key
@@ -88,10 +87,10 @@ type QueryPathResp struct {
 }
 
 type Path struct {
-	TreeUUID       uuid.UUID // TODO: should be Tree UUID encrypted with requester's PublicKey, ie. Public Key in QueryPath Request struct
-	NextHop        string
-	NextNextHop    string
-	ProxyPublicKey rsa.PublicKey
+	EncryptedTreeUUID []byte
+	NextHop           string
+	NextNextHop       string
+	ProxyPublicKey    rsa.PublicKey
 }
 
 type VerifyCoverReq struct {
@@ -103,8 +102,8 @@ type VerifyCoverResp struct {
 }
 
 type ConnectPathReq struct {
-	TreeUUID    uuid.UUID // TODO: should be Tree UUID encrypted with receiver's PublicKey, ie. Public Key in QueryPath Response struct
-	KeyExchange DHKeyExchange
+	EncryptedTreeUUID []byte
+	KeyExchange       DHKeyExchange
 }
 
 type ConnectPathResp struct {
@@ -118,10 +117,10 @@ type CreateProxyReq struct {
 }
 
 type CreateProxyResp struct {
-	Status      bool
-	KeyExchange DHKeyExchange
-	Public      rsa.PublicKey
-	TreeUUID    uuid.UUID // TODO: should be Tree UUID encrypted with requester's PublicKey, ie. Public Key in CreateProxy Request struct
+	Status            bool
+	KeyExchange       DHKeyExchange
+	Public            rsa.PublicKey
+	EncryptedTreeUUID []byte
 }
 
 type DeleteCoverReq struct {

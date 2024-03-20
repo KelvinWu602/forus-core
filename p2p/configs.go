@@ -1,0 +1,9 @@
+package p2p
+
+import "time"
+
+const COVER_MESSAGE_SENDING_INTERVAL time.Duration = 10 * time.Second
+const APPLICATION_MESSAGE_RECEIVING_INTERVAL time.Duration = 15 * time.Second
+const HALF_OPEN_PATH_BUFFER_SIZE int = 10000
+const TCP_REQUEST_TIMEOUT time.Duration = 10 * time.Second
+const TARGET_NUMBER_OF_CONNECTED_PATHS int = 3

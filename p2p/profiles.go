@@ -3,7 +3,6 @@ package p2p
 import (
 	"crypto/rsa"
 	"math/big"
-	"time"
 
 	"github.com/google/uuid"
 )
@@ -20,8 +19,7 @@ type PathProfile struct {
 
 // contains communication info for all cover nodes of the particular node.
 type CoverNodeProfile struct {
-	cover                     string // IP address of the cover node
-	secretKey                 big.Int
-	treeUUID                  uuid.UUID
-	lastCoverMessageTimestamp time.Time
+	cover     string // IP address of the cover node
+	secretKey big.Int
+	treeUUID  uuid.UUID
 }

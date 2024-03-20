@@ -1,7 +1,6 @@
 package p2p
 
 import (
-	"context"
 	"encoding/gob"
 	"log"
 	"net"
@@ -88,7 +87,7 @@ func (node *Node) checkPublishJobStatusWorker(jobID uuid.UUID, timeout time.Dura
 	node.markPublishJobStatus(jobID, publishJobProfile)
 }
 
-func (node *Node) sendCoverMessageWorker(ctx context.Context, conn net.Conn, interval time.Duration, pathID uuid.UUID) {
+func (node *Node) sendCoverMessageWorker(conn net.Conn, interval time.Duration, pathID uuid.UUID) {
 	log.Printf("sendCoverMessageWorker to %s is started successfully.\n", conn.RemoteAddr().String())
 
 	encoder := gob.NewEncoder(conn)
@@ -99,7 +98,6 @@ func (node *Node) sendCoverMessageWorker(ctx context.Context, conn net.Conn, int
 	defer close(doneErr)
 
 	for {
-		// TODO: send the cover message
 		go func() {
 			path := node.paths[pathID]
 			coverMsg, err := NewCoverMessage(path.proxyPublic, path.symKey)
@@ -121,7 +119,7 @@ func (node *Node) sendCoverMessageWorker(ctx context.Context, conn net.Conn, int
 			log.Printf("[Error]:sendCoverMessageWorker when sending cover message to %s: %v\n", conn.RemoteAddr().String(), err)
 			node.removePathProfile(pathID)
 			return
-		case <-ctx.Done():
+		case <-node.ctrlCSignalPropagator.Done():
 			node.removePathProfile(pathID)
 			log.Printf("sendCoverMessageWorker to %s is stopped successfully.\n", conn.RemoteAddr().String())
 			return
@@ -131,7 +129,7 @@ func (node *Node) sendCoverMessageWorker(ctx context.Context, conn net.Conn, int
 	}
 }
 
-func (node *Node) handleApplicationMessageWorker(ctx context.Context, conn net.Conn, maxInterval time.Duration) {
+func (node *Node) handleApplicationMessageWorker(conn net.Conn, maxInterval time.Duration) {
 	log.Printf("handleApplicationMessageWorker from %s is started successfully.\n", conn.RemoteAddr().String())
 
 	coverIp := conn.RemoteAddr().String()
@@ -168,7 +166,7 @@ func (node *Node) handleApplicationMessageWorker(ctx context.Context, conn net.C
 			log.Printf("handleApplicationMessageWorker from %s: COVER MESSAGE TIMEOUT.\n", conn.RemoteAddr().String())
 			node.removeCoversProfile(coverIp)
 			return
-		case <-ctx.Done():
+		case <-node.ctrlCSignalPropagator.Done():
 			log.Printf("handleApplicationMessageWorker from %s: CANCEL SIGNAL RECEIVED.\n", conn.RemoteAddr().String())
 			return
 		}
