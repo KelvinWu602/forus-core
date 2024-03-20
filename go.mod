@@ -8,6 +8,7 @@ require (
 	github.com/KelvinWu602/immutable-storage v0.0.0
 	github.com/KelvinWu602/node-discovery v1.0.3
 	github.com/google/uuid v1.6.0
+	gitlab.com/elktree/ecc v0.0.0-20190314182556-d86af7b58391
 	golang.org/x/exp v0.0.0-20231006140011-7918f672742d
 	google.golang.org/grpc v1.61.1
 )

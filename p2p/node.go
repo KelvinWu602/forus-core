@@ -2,7 +2,6 @@ package p2p
 
 import (
 	"bytes"
-	"crypto/rsa"
 	"encoding/gob"
 	"encoding/json"
 	"errors"
@@ -25,8 +24,8 @@ type Node struct {
 	paths       map[uuid.UUID]PathProfile
 	covers      map[string]CoverNodeProfile
 	publishJobs map[uuid.UUID]PublishJobProfile
-	publicKey   rsa.PublicKey
-	privateKey  rsa.PrivateKey
+	publicKey   []byte
+	privateKey  []byte
 
 	// Synchronization
 	pathsRWLock       *sync.RWMutex // should acquire a Read lock whenever reading paths content
@@ -73,15 +72,18 @@ func MakeServerAndStart(addr string) {
 func New(addr string) *Node {
 
 	// Generate Asymmetric Key Pair
-	public, private := generateAsymmetricKey()
+	public, private, err := GenerateAsymmetricKeyPair()
+	if err != nil {
+		log.Printf("Can't generate asymmetric Key Pairs")
+	}
 
 	nd := initNodeDiscoverClient()
 	is := initImmutableStorageClient()
 	// Tree Formation is delayed until the start of TCP server first to receive CM resp
 
 	self := &Node{
-		publicKey:         *public,
-		privateKey:        *private,
+		publicKey:         public,
+		privateKey:        private,
 		paths:             make(map[uuid.UUID]PathProfile),
 		covers:            make(map[string]CoverNodeProfile),
 		publishJobs:       make(map[uuid.UUID]PublishJobProfile),
@@ -138,13 +140,13 @@ func (n *Node) handleConnection(conn net.Conn) {
 	msg := ProtocolMessage{}
 	err := gob.NewDecoder(conn).Decode(&msg)
 	if err != nil {
-		log.Println("Error when handling connection from %s", conn.RemoteAddr().String())
+		log.Printf("Error when handling connection from %s", conn.RemoteAddr().String())
 		defer conn.Close()
 		return
 	}
 	err = n.handleMessage(conn, msg)
 	if err != nil {
-		log.Println("Error when handling message from %s, message = %v", conn.RemoteAddr().String(), msg)
+		log.Printf("Error when handling message from %s, message = %v", conn.RemoteAddr().String(), msg)
 	}
 }
 
@@ -158,34 +160,32 @@ func (n *Node) handleMessage(conn net.Conn, msg ProtocolMessage) error {
 		if req, castSuccess := msg.Content.(QueryPathReq); castSuccess {
 			return n.handleQueryPathReq(conn, &req)
 		}
-		break
 	case VerifyCoverRequest:
 		if req, castSuccess := msg.Content.(VerifyCoverReq); castSuccess {
 			return n.handleVerifyCoverReq(conn, &req)
 		}
-		break
 	case ConnectPathRequest:
 		if req, castSuccess := msg.Content.(ConnectPathReq); castSuccess {
 			return n.handleConnectPathReq(conn, &req)
 		}
-		break
+
 	case CreateProxyRequest:
 		if req, castSuccess := msg.Content.(CreateProxyReq); castSuccess {
 			return n.handleCreateProxyReq(conn, &req)
 		}
-		break
+
 	case DeleteCoverRequest:
 		if req, castSuccess := msg.Content.(DeleteCoverReq); castSuccess {
 			return n.handleDeleteCoverReq(conn, &req)
 		}
-		break
+
 	}
 	return errors.New("invalid incoming ProtocolMessage")
 }
 
 // A setup function for gob package to pre-register all encoding types before any sending tcp requests
 func initGobTypeRegistration() {
-	gob.Register(&rsa.PublicKey{})
+
 	gob.Register(&QueryPathReq{})
 	gob.Register(&DHKeyExchange{})
 	gob.Register(&ConnectPathReq{})
@@ -203,21 +203,22 @@ func initGobTypeRegistration() {
 // A generic function used to send tcp requests and wait for response with a timeout.
 func tcpSendAndWaitResponse[RESPONSE_TYPE any](reqBody *ProtocolMessage, destAddr string, timeout time.Duration) (*RESPONSE_TYPE, error) {
 	conn, err := net.Dial("tcp", destAddr)
-	defer conn.Close()
+
 	if err != nil {
-		log.Println("Error when dial tcp addr: %s \n", err)
+		log.Printf("error when dial tcp addr \n")
 		return nil, err
 	}
+	defer conn.Close()
 
 	err = gob.NewEncoder(conn).Encode(*reqBody)
 	if err != nil {
-		log.Println("Error when sending tcp request: %s \n", err)
+		log.Printf("Error when sending tcp request: %s \n", err)
 		return nil, err
 	}
 
 	response, err := waitForResponse[RESPONSE_TYPE](conn, timeout)
 	if err != nil {
-		log.Println("Error when receiving tcp request: %s \n", err)
+		log.Printf("Error when receiving tcp request: %s \n", err)
 		return nil, err
 	}
 	return response, nil
@@ -309,7 +310,7 @@ func (n *Node) sendDeleteCoverRequest(addr string) {
 	// Ignore any error, as we do not expect response
 	if conn, err := net.Dial("tcp", addr); err == nil {
 		defer conn.Close()
-		gob.NewEncoder(conn).Encode(*&deleteCoverRequest)
+		gob.NewEncoder(conn).Encode(deleteCoverRequest)
 	}
 }
 
@@ -476,13 +477,46 @@ func (n *Node) DeleteCover(coverIP string) {
 }
 
 // TODO(@SauDoge)
-func (n *Node) Forward(message []byte) error {
-	// 1) sym decrypt and check the first byte
-	// 	1.1) if byte = 0: cover message and send to next path
-	//  1.2) if byte = 1: asym decrypt and check correctness of checksum
-	//		1.2.1) if correct: publish and return nil
-	// 		1.2.2) if wrong: return error corrupted message
-	return errors.New("unimplemented error")
+func (n *Node) Forward(asymOutput []byte, coverIP string) error {
+
+	correctTree := n.covers[coverIP].treeUUID
+	correctSymKey := n.paths[correctTree].symKey
+	nextHop := n.paths[correctTree].next
+
+	// 1) symmetric encryption
+	symInput := SymmetricEncryptDataMessage{
+		Type:                      Real,
+		AsymetricEncryptedPayload: asymOutput,
+	}
+
+	symInputInBytes, err := symInput.ToBytes()
+	if err != nil {
+		return err
+	}
+
+	symOutput, err := SymmetricEncrypt(symInputInBytes, correctSymKey)
+	if err != nil {
+		return err
+	}
+
+	am := ApplicationMessage{
+		SymmetricEncryptedPayload: symOutput,
+	}
+
+	// 2) send to the next hop
+	// we can identify the correct next hop by the uuid of the tree
+	conn, err := net.Dial("tcp", nextHop)
+	if err != nil {
+		return errors.New("error when dial tcp addr")
+	}
+	defer conn.Close()
+
+	err = gob.NewEncoder(conn).Encode(am)
+	if err != nil {
+		return errors.New("error when sending tcp request")
+	}
+
+	return nil
 }
 
 // ****************
@@ -720,17 +754,17 @@ func (n *Node) handlePostMessage(w http.ResponseWriter, req *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte("Request Body not formatted correctly \n"))
 	} else {
-		// 1) call Forward()
-		_, err := n.Publish(message.Key, message.Content)
+		// 1) call Publish()
+		publishJobID, err := n.Publish(message.Key, message.Content)
 
 		if err != nil {
 			// 3) If forward failed, return failed
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte("Posting failed on backend. Please try again. \n"))
 		} else {
-			// 2) If forward successful, return success
+			// 2) If forward successful, return success and the publishingJobID
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("Message posted successfully.\n"))
+			w.Write(publishJobID[:])
 		}
 	}
 }
