@@ -1,7 +1,6 @@
 package p2p
 
 import (
-	"crypto/rsa"
 	"errors"
 
 	"github.com/KelvinWu602/immutable-storage/blueprint"
@@ -72,7 +71,7 @@ type ProtocolMessage struct {
 
 type QueryPathReq struct {
 	// The public key of the request sender node.
-	PublicKey rsa.PublicKey
+	PublicKey []byte
 }
 
 type QueryPathResp struct {
@@ -82,7 +81,7 @@ type QueryPathResp struct {
 	// 3) IP address of next hop
 	// 4) IP address of next-next-hop
 	// 5) proxy's public key
-	NodePublicKey rsa.PublicKey
+	NodePublicKey []byte
 	Paths         []Path
 }
 
@@ -90,7 +89,7 @@ type Path struct {
 	EncryptedTreeUUID []byte
 	NextHop           string
 	NextNextHop       string
-	ProxyPublicKey    rsa.PublicKey
+	ProxyPublicKey    []byte
 }
 
 type VerifyCoverReq struct {
@@ -113,13 +112,13 @@ type ConnectPathResp struct {
 
 type CreateProxyReq struct {
 	KeyExchange DHKeyExchange
-	PublicKey   rsa.PublicKey
+	PublicKey   []byte
 }
 
 type CreateProxyResp struct {
 	Status            bool
 	KeyExchange       DHKeyExchange
-	Public            rsa.PublicKey
+	Public            []byte
 	EncryptedTreeUUID []byte
 }
 

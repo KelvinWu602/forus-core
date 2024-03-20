@@ -3,7 +3,6 @@ package p2p
 import (
 	"bytes"
 	"context"
-	"crypto/rsa"
 	"encoding/gob"
 	"encoding/json"
 	"errors"
@@ -28,9 +27,9 @@ type Node struct {
 	halfOpenPath   map[uuid.UUID]PathProfile
 	covers         map[string]CoverNodeProfile
 	publishJobs    map[uuid.UUID]PublishJobProfile
-	peerPublicKeys map[string]rsa.PublicKey
-	publicKey      rsa.PublicKey
-	privateKey     rsa.PrivateKey
+	peerPublicKeys map[string][]byte
+	publicKey      []byte
+	privateKey     []byte
 
 	// Synchronization
 	pathsRWLock          *sync.RWMutex // should acquire a Read lock whenever reading paths content
@@ -68,21 +67,24 @@ func MakeServerAndStart(addr string) {
 func New(addr string, ctrlCSignalPropagator context.Context) *Node {
 
 	// Generate Asymmetric Key Pair
-	public, private := generateAsymmetricKey()
+	public, private, err := GenerateAsymmetricKeyPair()
+	if err != nil {
+		log.Printf("Can't generate asymmetric Key Pairs")
+	}
 
 	nd := initNodeDiscoverClient()
 	is := initImmutableStorageClient()
 	// Tree Formation is delayed until the start of TCP server first to receive CM resp
 
 	self := &Node{
-		publicKey:  *public,
-		privateKey: *private,
+		publicKey:  public,
+		privateKey: private,
 
 		paths:          make(map[uuid.UUID]PathProfile),
 		halfOpenPath:   make(map[uuid.UUID]PathProfile),
 		covers:         make(map[string]CoverNodeProfile),
 		publishJobs:    make(map[uuid.UUID]PublishJobProfile),
-		peerPublicKeys: make(map[string]rsa.PublicKey),
+		peerPublicKeys: make(map[string][]byte),
 
 		pathsRWLock:          &sync.RWMutex{},
 		halfOpenPathsRWLock:  &sync.RWMutex{},
@@ -144,13 +146,13 @@ func (n *Node) handleConnection(conn net.Conn) {
 	msg := ProtocolMessage{}
 	err := gob.NewDecoder(conn).Decode(&msg)
 	if err != nil {
-		log.Println("Error when handling connection from %s", conn.RemoteAddr().String())
+		log.Printf("Error when handling connection from %s", conn.RemoteAddr().String())
 		defer conn.Close()
 		return
 	}
 	err = n.handleMessage(conn, msg)
 	if err != nil {
-		log.Println("Error when handling message from %s, message = %v", conn.RemoteAddr().String(), msg)
+		log.Printf("Error when handling message from %s, message = %v", conn.RemoteAddr().String(), msg)
 	}
 }
 
@@ -164,27 +166,25 @@ func (n *Node) handleMessage(conn net.Conn, msg ProtocolMessage) error {
 		if req, castSuccess := msg.Content.(QueryPathReq); castSuccess {
 			return n.handleQueryPathReq(conn, &req)
 		}
-		break
 	case VerifyCoverRequest:
 		if req, castSuccess := msg.Content.(VerifyCoverReq); castSuccess {
 			return n.handleVerifyCoverReq(conn, &req)
 		}
-		break
 	case ConnectPathRequest:
 		if req, castSuccess := msg.Content.(ConnectPathReq); castSuccess {
 			return n.handleConnectPathReq(conn, &req)
 		}
-		break
+
 	case CreateProxyRequest:
 		if req, castSuccess := msg.Content.(CreateProxyReq); castSuccess {
 			return n.handleCreateProxyReq(conn, &req)
 		}
-		break
+
 	case DeleteCoverRequest:
 		if req, castSuccess := msg.Content.(DeleteCoverReq); castSuccess {
 			return n.handleDeleteCoverReq(conn, &req)
 		}
-		break
+
 	}
 	return errors.New("invalid incoming ProtocolMessage")
 }
@@ -192,7 +192,7 @@ func (n *Node) handleMessage(conn net.Conn, msg ProtocolMessage) error {
 // A setup function for gob package to pre-register all encoding types before any sending tcp requests
 // TODO: Update the types and check if any missing types.
 func initGobTypeRegistration() {
-	gob.Register(&rsa.PublicKey{})
+
 	gob.Register(&QueryPathReq{})
 	gob.Register(&DHKeyExchange{})
 	gob.Register(&ConnectPathReq{})
@@ -219,23 +219,20 @@ func tcpSendAndWaitResponse[RESPONSE_TYPE any](reqBody *ProtocolMessage, destAdd
 		log.Println("Error when dial tcp addr: %s \n", err)
 		return nil, nil, err
 	}
+	defer conn.Close()
 
 	err = gob.NewEncoder(conn).Encode(*reqBody)
 	if err != nil {
-		log.Println("Error when sending tcp request: %s \n", err)
+		log.Printf("Error when sending tcp request: %s \n", err)
 		return nil, nil, err
 	}
 
 	response, err := waitForResponse[RESPONSE_TYPE](conn)
 	if err != nil {
-		log.Println("Error when receiving tcp request: %s \n", err)
+		log.Printf("Error when receiving tcp request: %s \n", err)
 		return nil, nil, err
 	}
-	if keepAlive {
-		return response, &conn, nil
-	} else {
-		return response, nil, nil
-	}
+	return response, &conn, nil
 }
 
 // A generic function used to wait for tcp response.
@@ -338,7 +335,7 @@ func (n *Node) sendDeleteCoverRequest(addr string) {
 	// Ignore any error, as we do not expect response
 	if conn, err := net.Dial("tcp", addr); err == nil {
 		defer conn.Close()
-		gob.NewEncoder(conn).Encode(*&deleteCoverRequest)
+		gob.NewEncoder(conn).Encode(deleteCoverRequest)
 	}
 }
 
@@ -346,7 +343,7 @@ func (n *Node) sendDeleteCoverRequest(addr string) {
 // 1. QueryPath
 // 2. ConnectPath
 // 3. CreateProxy
-// 4. DeleteCover
+// 4. DeletePath
 
 // ACTIONS vs sendXXXRequest:
 // sendXXXRequest is just one of the steps of an ACTION, which simply sends out a request struct, and wait for a response struct to return.
@@ -462,8 +459,9 @@ func (n *Node) CreateProxy(addr string) (*CreateProxyResp, error) {
 	return resp, nil
 }
 
-func (n *Node) DeleteCover(addr string) {
+func (n *Node) DeletePath(addr string) {
 	n.sendDeleteCoverRequest(addr)
+	//TODO
 }
 
 // END of ACTIONs =====================
@@ -615,13 +613,61 @@ func (n *Node) AddProxyRole() (bool, error) {
 }
 
 // TODO(@SauDoge)
-func (n *Node) Forward(message []byte) error {
-	// 1) sym decrypt and check the first byte
-	// 	1.1) if byte = 0: cover message and send to next path
-	//  1.2) if byte = 1: asym decrypt and check correctness of checksum
-	//		1.2.1) if correct: publish and return nil
-	// 		1.2.2) if wrong: return error corrupted message
-	return errors.New("unimplemented error")
+func (n *Node) AddCover(coverIP string, treeUUID uuid.UUID, secret []byte) bool {
+	// 1) if total number of cover nodes reach maximum, return false
+	// 2) create new cover mapping and add to n.covers
+	// 3) wait for cover message from this new cover for k minute
+	// 	3.1) if failed: call DeleteCover()
+	// 	3.2) if success: return true
+
+	return false
+}
+
+func (n *Node) DeleteCover(coverIP string) {
+	delete(n.covers, coverIP)
+}
+
+// TODO(@SauDoge)
+func (n *Node) Forward(asymOutput []byte, coverIP string) error {
+
+	correctTree := n.covers[coverIP].treeUUID
+	correctSymKey := n.paths[correctTree].symKey
+	nextHop := n.paths[correctTree].next
+
+	// 1) symmetric encryption
+	symInput := SymmetricEncryptDataMessage{
+		Type:                      Real,
+		AsymetricEncryptedPayload: asymOutput,
+	}
+
+	symInputInBytes, err := symInput.ToBytes()
+	if err != nil {
+		return err
+	}
+
+	symOutput, err := SymmetricEncrypt(symInputInBytes, correctSymKey)
+	if err != nil {
+		return err
+	}
+
+	am := ApplicationMessage{
+		SymmetricEncryptedPayload: symOutput,
+	}
+
+	// 2) send to the next hop
+	// we can identify the correct next hop by the uuid of the tree
+	conn, err := net.Dial("tcp", nextHop)
+	if err != nil {
+		return errors.New("error when dial tcp addr")
+	}
+	defer conn.Close()
+
+	err = gob.NewEncoder(conn).Encode(am)
+	if err != nil {
+		return errors.New("error when sending tcp request")
+	}
+
+	return nil
 }
 
 // ****************
@@ -879,17 +925,17 @@ func (n *Node) handlePostMessage(w http.ResponseWriter, req *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte("Request Body not formatted correctly \n"))
 	} else {
-		// 1) call Forward()
-		_, err := n.Publish(message.Key, message.Content)
+		// 1) call Publish()
+		publishJobID, err := n.Publish(message.Key, message.Content)
 
 		if err != nil {
 			// 3) If forward failed, return failed
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte("Posting failed on backend. Please try again. \n"))
 		} else {
-			// 2) If forward successful, return success
+			// 2) If forward successful, return success and the publishingJobID
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("Message posted successfully.\n"))
+			w.Write(publishJobID[:])
 		}
 	}
 }

@@ -3,7 +3,6 @@ package p2p
 import (
 	"bytes"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/gob"
 	"math/big"
@@ -12,7 +11,7 @@ import (
 )
 
 // TODO: use the correct type in input
-func NewCoverMessage(proxyPublicKey rsa.PublicKey, symmetricKey big.Int) (*ApplicationMessage, error) {
+func NewCoverMessage(proxyPublicKey []byte, symmetricKey big.Int) (*ApplicationMessage, error) {
 	key := [48]byte{}
 	rand.Read(key[:])
 	content := [1024]byte{}
@@ -50,7 +49,7 @@ func NewCoverMessage(proxyPublicKey rsa.PublicKey, symmetricKey big.Int) (*Appli
 	}, nil
 }
 
-func NewRealMessage(dm DataMessage, proxyPublicKey rsa.PublicKey, symmetricKey big.Int) (*ApplicationMessage, error) {
+func NewRealMessage(dm DataMessage, proxyPublicKey []byte, symmetricKey big.Int) (*ApplicationMessage, error) {
 	asymInput, err := dm.CreateAsymmetricEncryptionInput()
 	if err != nil {
 		return nil, err
