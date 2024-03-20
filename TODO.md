@@ -44,11 +44,10 @@ A new control message type: "data"
 8. return entry<publishingJobID, Profile{key, status}>
 
 
-// Forward() is only called when the node realised it is a real message and itself is not the proxy
+// Forward() is only called when the node realised it is a real message and the node is not the proxy
 // The identification is done in handleRealMessage()
 ### Forward(message []byte) (TODO: update implementation)
 1. symmetric encryption and send to next hop on the same path (recognised from the profile)
-2. If success, IS.store(key, message)
 
 --------------------------------------------
 ## Encryption Scheme (TODO: @SauDoge)
