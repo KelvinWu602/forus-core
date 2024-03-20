@@ -44,15 +44,11 @@ A new control message type: "data"
 8. return entry<publishingJobID, Profile{key, status}>
 
 
-// only data can reach here after the 分流
+// Forward() is only called when the node realised it is a real message and itself is not the proxy
+// The identification is done in handleRealMessage()
 ### Forward(message []byte) (TODO: update implementation)
-1. Symmetric decryption
-2. Identify cover or real
-If cover, discard
-3. If real, Asymetric decryption
-4. Compare checksum
-5. If failed, symmetric encryption and send to next hop on the same path (recognised from the profile)
-6. If success, IS.store(key, message)
+1. symmetric encryption and send to next hop on the same path (recognised from the profile)
+2. If success, IS.store(key, message)
 
 --------------------------------------------
 ## Encryption Scheme (TODO: @SauDoge)
