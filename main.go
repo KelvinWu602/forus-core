@@ -6,6 +6,6 @@ import (
 
 func main() {
 
-	p2p.MakeServerAndStart(":3001")
+	p2p.MakeServerAndStart()
 	select {}
 }

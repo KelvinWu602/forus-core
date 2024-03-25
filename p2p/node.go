@@ -480,9 +480,7 @@ func (n *Node) MoveUp(addr string, uuid0 uuid.UUID) {
 	log.Printf("newNext is %s \n", newNext)
 	// switch case depend on newNext
 	// If newNext is node -> try connect
-	// If failed OR newNext is IPFS -> find a new Cluster
-	// If no new cluster -> become proxy itself
-
+	// If failed OR newNext is IPFS -> become proxy itself
 }
 
 func (n *Node) getNextHalfOpenPath() (*PathProfile, error) {
