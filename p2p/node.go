@@ -216,7 +216,7 @@ func tcpSendAndWaitResponse[RESPONSE_TYPE any](reqBody *ProtocolMessage, destAdd
 		}
 	}()
 	if err != nil {
-		log.Println("Error when dial tcp addr: %s \n", err)
+		log.Printf("error when dial tcp addr: %s \n", err)
 		return nil, nil, err
 	}
 	defer conn.Close()
