@@ -5,6 +5,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/KelvinWu602/immutable-storage/blueprint"
 	isProtos "github.com/KelvinWu602/immutable-storage/protos"
 	ndProtos "github.com/KelvinWu602/node-discovery/protos"
 	"google.golang.org/grpc"
@@ -61,10 +62,10 @@ func (ic *ImmutableStorageClient) New() {
 	ic.client = isProtos.NewImmutableStorageClient(conn)
 }
 
-func (ic *ImmutableStorageClient) Store(key []byte, body []byte) (*isProtos.StoreResponse, error) {
+func (ic *ImmutableStorageClient) Store(key blueprint.Key, body []byte) (*isProtos.StoreResponse, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	return ic.client.Store(ctx, &isProtos.StoreRequest{Key: key, Content: body})
+	return ic.client.Store(ctx, &isProtos.StoreRequest{Key: key[:], Content: body})
 }
 
 func (ic *ImmutableStorageClient) Read(key []byte) (*isProtos.ReadResponse, error) {

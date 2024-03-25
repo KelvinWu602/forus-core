@@ -49,12 +49,12 @@ type Node struct {
 	isClient ImmutableStorageClient
 }
 
-func MakeServerAndStart(addr string) {
+func MakeServerAndStart() {
 	// TODO: create a proper context for listening to Ctrl C signals
 	// 2nd returned value is a function, call it when received a SIGINT signal (Ctrl C)
 	ctrlCSignalPropagator, _ := context.WithCancel(context.Background())
-	s := New(addr, ctrlCSignalPropagator)
-	go s.StartTCP(addr)
+	s := New(ctrlCSignalPropagator)
+	go s.StartTCP()
 
 	// A blocking function, return after connected to 3 paths
 	s.formTree()
@@ -64,7 +64,7 @@ func MakeServerAndStart(addr string) {
 
 // New() creates a new node
 // This should only be called once for every core
-func New(addr string, ctrlCSignalPropagator context.Context) *Node {
+func New(ctrlCSignalPropagator context.Context) *Node {
 
 	// Generate Asymmetric Key Pair
 	public, private, err := GenerateAsymmetricKeyPair()
@@ -109,7 +109,7 @@ func New(addr string, ctrlCSignalPropagator context.Context) *Node {
 func (n *Node) StartHTTP() {
 	// Start HTTP server for web client
 	log.Printf("start http called \n")
-	hs := NewHTTPTransport(":3000")
+	hs := NewHTTPTransport(HTTP_SERVER_LISTEN_PORT)
 
 	hs.mux.HandleFunc("/GetMessage", n.handleGetMessage)
 	hs.mux.HandleFunc("/PostMessage", n.handlePostMessage)
@@ -120,7 +120,8 @@ func (n *Node) StartHTTP() {
 }
 
 // StartTCP() starts the internode communicating TCP
-func (n *Node) StartTCP(listenAddr string) {
+func (n *Node) StartTCP() {
+	listenAddr := TCP_SERVER_LISTEN_PORT
 	log.Printf("Node starts at %s \n", listenAddr)
 
 	listener, err := net.Listen("tcp", listenAddr)
@@ -724,36 +725,52 @@ func (n *Node) handleVerifyCoverReq(conn net.Conn, content *VerifyCoverReq) erro
 }
 
 func (n *Node) handleConnectPathReq(conn net.Conn, content *ConnectPathReq) error {
-	requestedPath, err := DecryptUUID(content.EncryptedTreeUUID, n.privateKey)
-	if err != nil {
-		logProtocolMessageHandlerError("handleConnectPathReq", conn, err, content)
-		return err
+	// check number of cover nodes
+	n.coversRWLock.RLock()
+	defer n.coversRWLock.RUnlock()
+	shouldAcceptConnection := len(n.covers) < MAXIMUM_NUMBER_OF_COVER_NODES
+
+	var connectPathResponse ProtocolMessage
+
+	if shouldAcceptConnection {
+		requestedPath, err := DecryptUUID(content.EncryptedTreeUUID, n.privateKey)
+		if err != nil {
+			logProtocolMessageHandlerError("handleConnectPathReq", conn, err, content)
+			return err
+		}
+		requesterKeyExchangeInfo := content.KeyExchange
+
+		lenInByte := 32
+		myKeyExchangeSecret := RandomBigInt(lenInByte)
+		myKeyExchangeInfo := requesterKeyExchangeInfo.GenerateReturn(*myKeyExchangeSecret)
+
+		// Generate Secret Symmetric Key for this connection
+		secretKey := requesterKeyExchangeInfo.GetSymKey(*myKeyExchangeSecret)
+
+		// add incoming node as a cover node
+		n.covers[conn.RemoteAddr().String()] = CoverNodeProfile{
+			cover:     conn.RemoteAddr().String(),
+			secretKey: secretKey,
+			treeUUID:  requestedPath,
+		}
+
+		connectPathResponse = ProtocolMessage{
+			Type: ConnectPathResponse,
+			Content: ConnectPathResp{
+				Status:      true,
+				KeyExchange: myKeyExchangeInfo,
+			},
+		}
+	} else {
+		connectPathResponse = ProtocolMessage{
+			Type: ConnectPathResponse,
+			Content: ConnectPathResp{
+				Status:      false,
+				KeyExchange: DHKeyExchange{},
+			},
+		}
 	}
-	requesterKeyExchangeInfo := content.KeyExchange
-
-	lenInByte := 32
-	myKeyExchangeSecret := RandomBigInt(lenInByte)
-	myKeyExchangeInfo := requesterKeyExchangeInfo.GenerateReturn(*myKeyExchangeSecret)
-
-	// Generate Secret Symmetric Key for this connection
-	secretKey := requesterKeyExchangeInfo.GetSymKey(*myKeyExchangeSecret)
-
-	// add incoming node as a cover node
-	n.covers[conn.RemoteAddr().String()] = CoverNodeProfile{
-		cover:     conn.RemoteAddr().String(),
-		secretKey: secretKey,
-		treeUUID:  requestedPath,
-	}
-
-	// TODO: check if number of cover node is too many (connection will use up system resources), if true, Status should be false
-	connectPathResponse := ProtocolMessage{
-		Type: ConnectPathResponse,
-		Content: ConnectPathResp{
-			Status:      true,
-			KeyExchange: myKeyExchangeInfo,
-		},
-	}
-	err = gob.NewEncoder(conn).Encode(connectPathResponse)
+	err := gob.NewEncoder(conn).Encode(connectPathResponse)
 	if err != nil {
 		logProtocolMessageHandlerError("handleConnectPathReq", conn, err, content)
 		return err
@@ -764,58 +781,76 @@ func (n *Node) handleConnectPathReq(conn net.Conn, content *ConnectPathReq) erro
 }
 
 func (n *Node) handleCreateProxyReq(conn net.Conn, content *CreateProxyReq) error {
-	lenInByte := 32
-	myKeyExchangeSecret := RandomBigInt(lenInByte)
-	myKeyExchangeInfo := content.KeyExchange.GenerateReturn(*myKeyExchangeSecret)
-	secretKey := content.KeyExchange.GetSymKey(*myKeyExchangeSecret)
-	requesterPublicKey := content.PublicKey
+	// check number of cover nodes
+	n.coversRWLock.RLock()
+	defer n.coversRWLock.RUnlock()
+	shouldAcceptConnection := len(n.covers) < MAXIMUM_NUMBER_OF_COVER_NODES
 
-	// new path as self becomes the starting point of a new path
-	newPathID, _ := uuid.NewUUID()
-	n.paths[newPathID] = PathProfile{
-		uuid:        newPathID,
-		next:        "ImmutableStorage", // Use a value tag to reflect that the next hop is ImmutableStorage
-		next2:       "",                 // There is no next-next hop
-		symKey:      secretKey,
-		proxyPublic: n.publicKey,
+	var createProxyResponse ProtocolMessage
+
+	if shouldAcceptConnection {
+
+		lenInByte := 32
+		myKeyExchangeSecret := RandomBigInt(lenInByte)
+		myKeyExchangeInfo := content.KeyExchange.GenerateReturn(*myKeyExchangeSecret)
+		secretKey := content.KeyExchange.GetSymKey(*myKeyExchangeSecret)
+		requesterPublicKey := content.PublicKey
+
+		// new path as self becomes the starting point of a new path
+		newPathID, _ := uuid.NewUUID()
+		n.paths[newPathID] = PathProfile{
+			uuid:        newPathID,
+			next:        "ImmutableStorage", // Use a value tag to reflect that the next hop is ImmutableStorage
+			next2:       "",                 // There is no next-next hop
+			symKey:      secretKey,
+			proxyPublic: n.publicKey,
+		}
+
+		// new cover node
+		n.covers[conn.RemoteAddr().String()] = CoverNodeProfile{
+			cover:     conn.RemoteAddr().String(),
+			secretKey: secretKey,
+			treeUUID:  newPathID,
+		}
+
+		// send a create proxy response back
+		encryptedPathID, err := EncryptUUID(newPathID, requesterPublicKey)
+		if err != nil {
+			logProtocolMessageHandlerError("handleCreateProxyReq", conn, err, content)
+			return err
+		}
+
+		createProxyResponse = ProtocolMessage{
+			Type: CreateProxyRequest,
+			Content: CreateProxyResp{
+				Status:            true,
+				KeyExchange:       myKeyExchangeInfo,
+				Public:            n.publicKey,
+				EncryptedTreeUUID: encryptedPathID,
+			},
+		}
+	} else {
+		createProxyResponse = ProtocolMessage{
+			Type: CreateProxyRequest,
+			Content: CreateProxyResp{
+				Status:            false,
+				KeyExchange:       DHKeyExchange{},
+				Public:            []byte{},
+				EncryptedTreeUUID: []byte{},
+			},
+		}
 	}
 
-	// new cover node
-	n.covers[conn.RemoteAddr().String()] = CoverNodeProfile{
-		cover:     conn.RemoteAddr().String(),
-		secretKey: secretKey,
-		treeUUID:  newPathID,
-	}
-
-	// send a create proxy response back
-	encryptedPathID, err := EncryptUUID(newPathID, requesterPublicKey)
-	if err != nil {
-		logProtocolMessageHandlerError("handleCreateProxyReq", conn, err, content)
-		return err
-	}
-
-	createProxyResponse := ProtocolMessage{
-		Type: CreateProxyRequest,
-		Content: CreateProxyResp{
-			Status:            true, //TODO: when resource is tight, should not accept the request
-			KeyExchange:       myKeyExchangeInfo,
-			Public:            n.publicKey,
-			EncryptedTreeUUID: encryptedPathID,
-		},
-	}
-
-	err = gob.NewEncoder(conn).Encode(createProxyResponse)
+	err := gob.NewEncoder(conn).Encode(createProxyResponse)
 	if err != nil {
 		logProtocolMessageHandlerError("handleCreateProxyReq", conn, err, content)
 	}
 	return err
 }
 
-func (n *Node) handleDeleteCoverReq(conn net.Conn, content *DeleteCoverReq) error {
+func (n *Node) handleDeleteCoverReq(conn net.Conn, _ *DeleteCoverReq) error {
 	requesterIP := conn.RemoteAddr().String()
-	if _, found := n.covers[requesterIP]; found {
-		delete(n.covers, requesterIP)
-	}
+	delete(n.covers, requesterIP)
 	return nil
 }
 
@@ -869,8 +904,26 @@ func (n *Node) handleRealMessage(asymOutput []byte) error {
 	}
 	if isProxy {
 		// Store in ImmutableStorage
+		key := asymInput.Data.Key
+		content := asymInput.Data.Content
+		resp, err := n.isClient.Store(key, content)
+		if err != nil {
+			return err
+		}
+		log.Printf("[Proxy.Store: Status = %v]:Key=%s", resp.Success, string(key[:]))
 	} else {
 		// Call Forward
+		n.pathsRWLock.Lock()
+		defer n.pathsRWLock.RUnlock()
+		randI := rand.Intn(len(n.paths))
+		i := 0
+		for _, path := range n.paths {
+			if i == randI {
+				return n.Forward(asymOutput, path.next)
+			}
+			i++
+		}
+		return errors.New("unknown error during Forward")
 	}
 	return nil
 }

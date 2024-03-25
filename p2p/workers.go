@@ -141,7 +141,6 @@ func (node *Node) handleApplicationMessageWorker(conn net.Conn, maxInterval time
 	defer close(doneErr)
 
 	for {
-		// TODO: expect application message to arrive
 		go func() {
 			msg := ApplicationMessage{}
 			err := decoder.Decode(&msg)
