@@ -71,13 +71,21 @@
             - MoveUp should backup the path info (for next next hop, proxy key, uuid), then delete the path 
             - Use the path info, decide；
                 - If next next hop is a node, connect to it
-                    - i.e. formTree() with the next-next hop
+                    - the next next hop needs to update the cover node profiles
+                    - the next hop needs to update the cover node profiles
+                    - self needs to update this paths' next hop and next next hop
+                    - first child cover node needs to update this paths' next next hop
+                    - pathID and proxyPublicKey stays the same
                 - If failed or next next hop is IPFS, become a proxy
-                    - Create a new path profile
-                    - next hop = IPFS
-                    - next next hop = ""
-                    - proxyPublicKey = self public key
-                    - pathID = new uuid
+                    - Create a new path profile {next hop: IPFS, next next hop = "", proxyPublicKey = self public key, pathID = new uuid}
+                    - All children in cover node profiles of self needs to update this path profile 
+                - The new info needs to propagate to the descendants -- another set of TCP ProtocolMessage Handlers
+                    - Send a mapping {old Path Profile: New Path Profile} to the covers
+                    - The covers will update itself and send the mapping to their covers, until there is no covers on the original path
+    - Need some sort of RWLock on the 'pathAnalytics' and RWLock to prevent any more message sending to that deceased proxy
+    - Self, when it just becomes the proxy, might receive a shit ton of message that it cannot asymmetric decrypt 
+        - which could trigger a new round of MoveUp (vicious cycle)
+        - Therefore, the child retries all pending messages when they receive a new pathUUID
 
 # grpc_transport.go
 
