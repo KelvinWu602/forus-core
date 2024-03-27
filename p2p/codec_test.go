@@ -2,9 +2,14 @@ package p2p
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 
 	"github.com/google/uuid"
+)
+
+const (
+	ErrInvalidMAC = "wrong private key"
 )
 
 func TestGenerateAsymmetricKeyPair(t *testing.T) {
@@ -39,7 +44,22 @@ func TestAsymmetricEncrypt(t *testing.T) {
 	if !bytes.Equal(decrypted, message) {
 		t.Fatalf("Encrypt and decrypted failed to return to original")
 	}
+}
 
+func TestAsymmetricDecryptInWrongKey(t *testing.T) {
+	pubCorrect, _, _ := GenerateAsymmetricKeyPair()
+	_, privWrong, _ := GenerateAsymmetricKeyPair()
+	message := []byte("Hello, World!")
+	encryptedPayload, _ := AsymmetricEncrypt(message, pubCorrect)
+
+	_, err := AsymmetricDecrypt(encryptedPayload, privWrong)
+
+	if err.Error() == ErrInvalidMAC {
+		fmt.Println("Encryption with wrong priv key")
+
+	} else if err != nil {
+		t.Fatalf("%v", err)
+	}
 }
 
 func TestKeyExchange(t *testing.T) {

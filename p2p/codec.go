@@ -5,6 +5,7 @@ import (
 	"crypto/cipher"
 	"crypto/elliptic"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"log"
 	"math/big"
@@ -56,7 +57,9 @@ func AsymmetricDecrypt(input []byte, privInBytes []byte) ([]byte, error) {
 	}
 
 	decrypted, err := priv.Decrypt(input)
-	if err != nil {
+	if err.Error() == "Invalid MAC" {
+		return nil, errors.New("wrong private key")
+	} else if err != nil {
 		return nil, err
 	}
 

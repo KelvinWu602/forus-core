@@ -19,8 +19,8 @@ const (
 )
 
 type NodeDiscoveryClient struct {
-	client  ndProtos.NodeDiscoveryClient
-	members []string
+	client ndProtos.NodeDiscoveryClient
+	// members []string
 }
 
 type ImmutableStorageClient struct {
@@ -89,13 +89,13 @@ func (ic *ImmutableStorageClient) IsDiscovered(key []byte) (*isProtos.IsDiscover
 func initNodeDiscoverClient() *NodeDiscoveryClient {
 	nd := &NodeDiscoveryClient{}
 	nd.New()
-	resp, err := nd.GetMembers()
+	_, err := nd.GetMembers()
 	if err != nil {
 		log.Fatalf("Cannot get member from node discovery %s \n", err)
 	}
 
 	// iterate until the first alive member
-	nd.members = resp.Member
+	// nd.members = resp.Member
 	return nd
 }
 
