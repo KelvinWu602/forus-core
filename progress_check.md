@@ -71,6 +71,7 @@
             - MoveUp should backup the path info (for next next hop, proxy key, uuid), then delete the path 
             - Use the path info, decide；
                 - If next next hop is a node, connect to it
+                    - i.e. formTree() with the next-next hop
                 - If failed or next next hop is IPFS, become a proxy
                     - Create a new path profile
                     - next hop = IPFS
