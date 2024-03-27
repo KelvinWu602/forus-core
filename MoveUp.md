@@ -1,10 +1,9 @@
 # Move Up
 
 ## Move Up Condition
-There are two possible scenarios where moveUp should be called:
+There are two possible scenarios where moveUp should be called: (the two checking needs a lock to prevent both checks to be true)
 
 ### Scenario 1: Actively move up due to failed Jobs
-
 1. For each path, the node will maintain a `pathAnalytics` as a profile.
     - successCount
     - failureCount
@@ -13,8 +12,8 @@ There are two possible scenarios where moveUp should be called:
     - if job fails to publish: failureCount += 1
 3. `checkMoveUpRequirementsWorker()` periodically checks `pathAnalytics`:
     - if failureCount >= X: `go MoveUpVoluntarily(oldUUID)`
+    - 
 ### Scenario 2: Passively move up due to next hop moving up
-
 1. every node's `checkMoveUpRequirementsWorker()` periodically calls `QueryPath` with next-hop
 2. If there exists an path with the same treeUUID but self.next_next != next.next -> the next-hop has moved up
     - `go MoveUpInvoluntarily(oldUUID, false)`
