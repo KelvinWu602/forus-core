@@ -2,21 +2,25 @@
 
 ## Move Up Condition
 There are two possible scenarios where moveUp should be called:
+
 ### Scenario 1: Actively move up due to failed Jobs
-    1. For each path, the node will maintain a `pathAnalytics` as a profile.
-        - successCount
-        - failureCount
-    2. `checkPublishJobStatusWorker()` updates `pathAnalytics`:
-        - if job is successful: successCount += 1
-        - if job fails to publish: failureCount += 1
-    3. `checkMoveUpRequirementsWorker()` periodically checks `pathAnalytics`:
-        - if failureCount >= X: `go MoveUpVoluntarily(oldUUID)`
+
+1. For each path, the node will maintain a `pathAnalytics` as a profile.
+    - successCount
+    - failureCount
+2. `checkPublishJobStatusWorker()` updates `pathAnalytics`:
+    - if job is successful: successCount += 1
+    - if job fails to publish: failureCount += 1
+3. `checkMoveUpRequirementsWorker()` periodically checks `pathAnalytics`:
+    - if failureCount >= X: `go MoveUpVoluntarily(oldUUID)`
+    - 
 ### Scenario 2: Passively move up due to next hop moving up
-    1. every node's `checkMoveUpRequirementsWorker()` periodically calls `QueryPath` with next-hop
-    2. If there exists an path with the same treeUUID but self.next_next != next.next -> the next-hop has moved up
-        - `go MoveUpInvoluntarily(oldUUID, false)`
-    3. If there exists a new path where next is IPFS -> the next-hop has become a proxy
-        - `go MoveUpInvoluntarily(oldUUID, true)`
+
+1. every node's `checkMoveUpRequirementsWorker()` periodically calls `QueryPath` with next-hop
+2. If there exists an path with the same treeUUID but self.next_next != next.next -> the next-hop has moved up
+    - `go MoveUpInvoluntarily(oldUUID, false)`
+3. If there exists a new path where next is IPFS -> the next-hop has become a proxy
+    - `go MoveUpInvoluntarily(oldUUID, true)`
 
 ## MoveUpVoluntarily() Implementation
 1. Given the treeUUID, find the original_next and original_next_next in self.paths
