@@ -13,7 +13,6 @@ There are two possible scenarios where moveUp should be called:
     - if job fails to publish: failureCount += 1
 3. `checkMoveUpRequirementsWorker()` periodically checks `pathAnalytics`:
     - if failureCount >= X: `go MoveUpVoluntarily(oldUUID)`
-    - 
 ### Scenario 2: Passively move up due to next hop moving up
 
 1. every node's `checkMoveUpRequirementsWorker()` periodically calls `QueryPath` with next-hop
