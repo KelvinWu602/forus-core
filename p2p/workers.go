@@ -47,7 +47,10 @@ func (node *Node) removePathProfile(pathID uuid.UUID) {
 // ==========================================
 
 // publishJobStatusChecker will monitor the status of a publish job for a given timeout.
-func (node *Node) checkPublishJobStatusWorker(jobID uuid.UUID, timeout time.Duration, checkInterval time.Duration) {
+func (node *Node) checkPublishJobStatusWorker(jobID uuid.UUID) {
+	timeout := PUBLISH_JOB_FAILED_TIMEOUT
+	checkInterval := PUBLISH_JOB_CHECKING_INTERVAL
+
 	// check if the job really exists
 	node.publishJobsRWLock.RLock()
 	publishJobProfile, jobExists := node.publishJobs[jobID]

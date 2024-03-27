@@ -46,7 +46,7 @@
 - store in ImmutableStorage (@KelvinWu602) - Done
 - call Forward (@KelvinWu602) - Done
 
-## func ConnectPath()
+## func ConnectPath() - Done
 
 - need a way to externalize TCP connection for later Publish (@KelvinWu602)
     - `ConnectPath()`: Should store the TCP connection in member map `OpenConnections map[uuid.UUID]*net.Conn`

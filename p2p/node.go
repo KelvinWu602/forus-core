@@ -23,20 +23,22 @@ var httpWg sync.WaitGroup // TODO(@SauDoge): Find the correct place to terminate
 
 type Node struct {
 	// Info members
-	paths          map[uuid.UUID]PathProfile
-	halfOpenPath   map[uuid.UUID]PathProfile
-	covers         map[string]CoverNodeProfile
-	publishJobs    map[uuid.UUID]PublishJobProfile
-	peerPublicKeys map[string][]byte
-	publicKey      []byte
-	privateKey     []byte
+	paths           map[uuid.UUID]PathProfile
+	openConnections map[uuid.UUID]*net.Conn
+	halfOpenPath    map[uuid.UUID]PathProfile
+	covers          map[string]CoverNodeProfile
+	publishJobs     map[uuid.UUID]PublishJobProfile
+	peerPublicKeys  map[string][]byte
+	publicKey       []byte
+	privateKey      []byte
 
 	// Synchronization
-	pathsRWLock          *sync.RWMutex // should acquire a Read lock whenever reading paths content
-	halfOpenPathsRWLock  *sync.RWMutex // should acquire a Read lock whenever reading halfOpenPaths content
-	publishJobsRWLock    *sync.RWMutex // should acquire a Read lock whenever reading publishJobs content
-	coversRWLock         *sync.RWMutex // should acquire a Read lock whenever reading covers content
-	peerPublicKeysRWLock *sync.RWMutex // should acquire a Read lock whenever reading peerPublicKeys content
+	pathsRWLock           *sync.RWMutex // should acquire a Read lock whenever reading paths content
+	openConnectionsRWLock *sync.RWMutex // should acquire a Read lock whenever reading openConnections content
+	halfOpenPathsRWLock   *sync.RWMutex // should acquire a Read lock whenever reading halfOpenPaths content
+	publishJobsRWLock     *sync.RWMutex // should acquire a Read lock whenever reading publishJobs content
+	coversRWLock          *sync.RWMutex // should acquire a Read lock whenever reading covers content
+	peerPublicKeysRWLock  *sync.RWMutex // should acquire a Read lock whenever reading peerPublicKeys content
 
 	// ConnectPath Scheduler
 	pendingHalfOpenPaths chan uuid.UUID
@@ -80,17 +82,19 @@ func New(ctrlCSignalPropagator context.Context) *Node {
 		publicKey:  public,
 		privateKey: private,
 
-		paths:          make(map[uuid.UUID]PathProfile),
-		halfOpenPath:   make(map[uuid.UUID]PathProfile),
-		covers:         make(map[string]CoverNodeProfile),
-		publishJobs:    make(map[uuid.UUID]PublishJobProfile),
-		peerPublicKeys: make(map[string][]byte),
+		paths:           make(map[uuid.UUID]PathProfile),
+		openConnections: make(map[uuid.UUID]*net.Conn),
+		halfOpenPath:    make(map[uuid.UUID]PathProfile),
+		covers:          make(map[string]CoverNodeProfile),
+		publishJobs:     make(map[uuid.UUID]PublishJobProfile),
+		peerPublicKeys:  make(map[string][]byte),
 
-		pathsRWLock:          &sync.RWMutex{},
-		halfOpenPathsRWLock:  &sync.RWMutex{},
-		publishJobsRWLock:    &sync.RWMutex{},
-		coversRWLock:         &sync.RWMutex{},
-		peerPublicKeysRWLock: &sync.RWMutex{},
+		pathsRWLock:           &sync.RWMutex{},
+		openConnectionsRWLock: &sync.RWMutex{},
+		halfOpenPathsRWLock:   &sync.RWMutex{},
+		publishJobsRWLock:     &sync.RWMutex{},
+		coversRWLock:          &sync.RWMutex{},
+		peerPublicKeysRWLock:  &sync.RWMutex{},
 
 		pendingHalfOpenPaths: make(chan uuid.UUID, 512),
 
@@ -401,6 +405,12 @@ func (n *Node) ConnectPath(addr string, treeID uuid.UUID) (*ConnectPathResp, err
 
 	if resp.Status {
 		n.halfOpenPathsRWLock.Lock()
+		n.pathsRWLock.Lock()
+		n.openConnectionsRWLock.Lock()
+		defer n.halfOpenPathsRWLock.Unlock()
+		defer n.pathsRWLock.Unlock()
+		defer n.openConnectionsRWLock.Unlock()
+
 		// retrieve the half open path profile
 		halfOpenPathProfile, found := n.halfOpenPath[treeID]
 		if !found {
@@ -408,9 +418,7 @@ func (n *Node) ConnectPath(addr string, treeID uuid.UUID) (*ConnectPathResp, err
 		}
 		// delete the half open path profile, as it is completely 'open'.
 		delete(n.halfOpenPath, treeID)
-		n.halfOpenPathsRWLock.Unlock()
 
-		n.pathsRWLock.Lock()
 		// create new path profile
 		n.paths[treeID] = PathProfile{
 			uuid:        treeID,
@@ -419,10 +427,11 @@ func (n *Node) ConnectPath(addr string, treeID uuid.UUID) (*ConnectPathResp, err
 			proxyPublic: halfOpenPathProfile.proxyPublic,
 			symKey:      resp.KeyExchange.GetSymKey(*myKeyExchangeSecret),
 		}
-		n.pathsRWLock.Unlock()
 
 		// Start the sendCoverMessageWorker
 		go n.sendCoverMessageWorker(*connPtr, COVER_MESSAGE_SENDING_INTERVAL, treeID)
+		// Store a pointer to the opened tcp connection for later publish jobs
+		n.openConnections[treeID] = connPtr
 	}
 	return resp, nil
 }
@@ -536,7 +545,7 @@ func (n *Node) Publish(key is.Key, message []byte) (uuid.UUID, error) {
 	// 1) Check tree formation status
 	// a) the node has connected to at least one path
 	// b) has at least k cover nodes
-	if len(n.covers) < 10 || len(n.paths) < 1 {
+	if len(n.covers) < NUMBER_OF_COVER_NODES_FOR_PUBLISH || len(n.paths) < 1 {
 		return uuid.Nil, errors.New("publishing condition not met")
 	}
 	// 2) Validate the key
@@ -545,16 +554,8 @@ func (n *Node) Publish(key is.Key, message []byte) (uuid.UUID, error) {
 		return uuid.Nil, errors.New("key not valid")
 	}
 	// 3) Pick a path
-	randomPathIdx := rand.Intn(len(n.paths))
-	var randomPathProfile PathProfile
-	for _, v := range n.paths {
-		if randomPathIdx == 0 {
-			// pick the path
-			randomPathProfile = v
-		} else {
-			randomPathIdx = randomPathIdx - 1
-		}
-	}
+	pathID, randomPathProfile := pick(n.paths, n.pathsRWLock)
+	conn := *n.openConnections[pathID]
 
 	// 4) encrypt the data message to application message
 	dataMessage := DataMessage{Key: key, Content: message}
@@ -565,12 +566,6 @@ func (n *Node) Publish(key is.Key, message []byte) (uuid.UUID, error) {
 
 	// 5) send the application message to the next hop
 	// TODO: mentions re-use conn but dont know where, need to find out
-	conn, err := net.Dial("tcp", randomPathProfile.next)
-	if err != nil {
-		return uuid.Nil, errors.New("error when dial tcp addr")
-	}
-	defer conn.Close()
-
 	err = gob.NewEncoder(conn).Encode(am)
 	if err != nil {
 		return uuid.Nil, errors.New("error when sending tcp request")
@@ -578,11 +573,14 @@ func (n *Node) Publish(key is.Key, message []byte) (uuid.UUID, error) {
 
 	// 6) update the publishingJob map
 	n.publishJobsRWLock.Lock()
+	defer n.publishJobsRWLock.Unlock()
 	newJobID := uuid.New()
 	n.publishJobs[newJobID] = PublishJobProfile{Key: key[:], Status: PENDING}
-	n.publishJobsRWLock.Unlock()
 
-	// 7) return the publishJobID
+	// 7) initiate checkPublishJobStatusWorker()
+	go n.checkPublishJobStatusWorker(newJobID)
+
+	// 8) return the publishJobID
 	return newJobID, nil
 }
 
