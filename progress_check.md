@@ -18,7 +18,7 @@
 
 ## func formTree()
 
-- simplify formTree() design, currently it is too complicated. (@KelvinWu602)
+- simplify formTree() design, currently it is too complicated. (@KelvinWu602) - Done
     - create a cancellable worker `populateHalfOpenPaths()`.
     - formTree will start to consume halfOpenPaths.
     - if it is empty, start the worker.

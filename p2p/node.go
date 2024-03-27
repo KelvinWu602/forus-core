@@ -493,43 +493,30 @@ func (n *Node) MoveUp(addr string, uuid0 uuid.UUID) {
 }
 
 func (n *Node) getNextHalfOpenPath() (*PathProfile, error) {
-	halfOpenPathID := <-n.pendingHalfOpenPaths
-	n.halfOpenPathsRWLock.RLock()
-	defer n.halfOpenPathsRWLock.RUnlock()
-	result, found := n.halfOpenPath[halfOpenPathID]
-	if found {
+	var result PathProfile
+	var found bool
+	alreadyConnected := true
+	for alreadyConnected {
+		halfOpenPathID := <-n.pendingHalfOpenPaths
+		n.halfOpenPathsRWLock.RLock()
+		n.pathsRWLock.RLock()
+		defer n.halfOpenPathsRWLock.RUnlock()
+		defer n.pathsRWLock.RUnlock()
+		result, found = n.halfOpenPath[halfOpenPathID]
+		_, alreadyConnected = n.paths[halfOpenPathID]
+	}
+	if found && !alreadyConnected {
 		return &result, nil
 	} else {
 		return nil, errors.New("half open path not found")
 	}
 }
 
-// TODO(@SauDoge) Tree Formation Process by aggregating QueryPath, CreateProxy, ConnectPath & joining cluster
+// Tree Formation Process by aggregating QueryPath, CreateProxy, ConnectPath & joining cluster
 func (n *Node) formTree() {
 	// Starts a worker looping through all members to accumulate halfOpenPaths
-	finishFormTree := make(chan bool)
-	defer close(finishFormTree)
-	go func() {
-		done := make(chan bool)
-		defer close(done)
-		for {
-			go func() {
-				if resp, err := n.ndClient.GetMembers(); err == nil {
-					for _, memberIP := range resp.Member {
-						addr := memberIP + ":3001"
-						n.QueryPath(addr)
-					}
-				}
-				done <- true
-			}()
-			select {
-			case <-done:
-				continue
-			case <-finishFormTree:
-				return
-			}
-		}
-	}()
+	ctx, stopWorker := context.WithCancel(context.Background())
+	go n.populateHalfOpenPathsWorker(ctx)
 
 	for len(n.paths) < TARGET_NUMBER_OF_CONNECTED_PATHS {
 		if halfOpenPath, err := n.getNextHalfOpenPath(); err == nil {
@@ -537,7 +524,28 @@ func (n *Node) formTree() {
 			n.ConnectPath(halfOpenPath.next, halfOpenPath.uuid)
 		}
 	}
-	finishFormTree <- true
+	stopWorker()
+}
+
+// Tree Formation Process with a particular target next hop, can fail.
+func (n *Node) formTreeWithTarget(targetAddr string, targetPathID uuid.UUID) error {
+	n.pathsRWLock.RLock()
+	defer n.pathsRWLock.RUnlock()
+	if _, pathIsConnected := n.paths[targetPathID]; pathIsConnected {
+		return errors.New("pathID is already connected")
+	}
+	resp, err := n.QueryPath(targetAddr)
+	if err != nil {
+		return err
+	}
+	for _, path := range resp.Paths {
+		respPathID, err := DecryptUUID(path.EncryptedTreeUUID, n.privateKey)
+		if err == nil && respPathID == targetPathID {
+			_, err = n.ConnectPath(targetAddr, targetPathID)
+			return err
+		}
+	}
+	return errors.New("pathID does not exists in the targetAddr node")
 }
 
 // TODO(@SauDoge): return the publishJobId should be enough, such that other function can simply check the map
