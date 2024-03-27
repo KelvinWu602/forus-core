@@ -38,7 +38,7 @@
 
 - delete unnecessary guard around delete() (@KelvinWU602) - Done
 
-## func handleRealMessage()
+## func handleRealMessage() - Done
 
 - verify behavior of asymmetricDecrypt, see if the module using a wrong private key to decrypt will report error (@SauDoge6597) DONE
   - Ecc will return a Invalid MAC Error if the wrong private key is used (refer to codec_test.go TestAsymmetricDecryptInWrongKey for an example)

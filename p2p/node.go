@@ -885,18 +885,14 @@ func (n *Node) handleApplicationMessage(rawMessage ApplicationMessage, coverIp s
 func (n *Node) handleRealMessage(asymOutput []byte) error {
 	priKey := n.privateKey
 	asymInputBytes, err := AsymmetricDecrypt(asymOutput, priKey)
-	if err != nil {
-		// Failed to decrypt
-		// Investigate the library behavior, see if wrong private key will throw error
+	if err != nil && !errors.Is(err, errWrongPrivateKey) {
+		// Failed to decrypt, unknown error
 		return err
 	}
-	// Check if self is the proxy: check the checksum
+	// Check if self is the proxy
+	isProxy := err == nil
 	asymInput := AsymetricEncryptDataMessage{}
 	err = gob.NewDecoder(bytes.NewBuffer(asymInputBytes)).Decode(&asymInput)
-	if err != nil {
-		return err
-	}
-	isProxy, err := asymInput.ValidateChecksum()
 	if err != nil {
 		return err
 	}

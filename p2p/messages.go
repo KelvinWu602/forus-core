@@ -48,9 +48,8 @@ type SymmetricEncryptDataMessage struct {
 
 // AsymetricEncryptDataMessage includes DataMessage and additional info to be asymmetric encrypted.
 type AsymetricEncryptDataMessage struct {
-	Data     DataMessage
-	Salt     [64]byte
-	Checksum [32]byte
+	Data DataMessage
+	Salt [64]byte
 }
 
 // DataMessage is the actual message whose publisher is intended to be hidden by the protocol.

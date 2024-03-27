@@ -14,6 +14,8 @@ import (
 	"gitlab.com/elktree/ecc"
 )
 
+var errWrongPrivateKey error = errors.New("wrong private key")
+
 // ==========================================
 // Asymmetric Encryption
 // ==========================================
@@ -58,7 +60,7 @@ func AsymmetricDecrypt(input []byte, privInBytes []byte) ([]byte, error) {
 
 	decrypted, err := priv.Decrypt(input)
 	if err.Error() == "Invalid MAC" {
-		return nil, errors.New("wrong private key")
+		return nil, errWrongPrivateKey
 	} else if err != nil {
 		return nil, err
 	}

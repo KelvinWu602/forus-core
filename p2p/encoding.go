@@ -3,11 +3,8 @@ package p2p
 import (
 	"bytes"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/gob"
 	"math/big"
-
-	"golang.org/x/exp/slices"
 )
 
 // TODO: use the correct type in input
@@ -87,33 +84,11 @@ func (msg *DataMessage) CreateAsymmetricEncryptionInput() (*AsymetricEncryptData
 
 	// Create result padded with zero checksum
 	result := AsymetricEncryptDataMessage{
-		Data:     *msg,
-		Salt:     salt,
-		Checksum: [32]byte{},
+		Data: *msg,
+		Salt: salt,
 	}
 
-	resultBytes, err := result.ToBytes()
-	if err != nil {
-		return nil, err
-	}
-
-	checksum := sha256.Sum256(resultBytes)
-	result.Checksum = checksum
 	return &result, nil
-}
-
-func (msg *AsymetricEncryptDataMessage) ValidateChecksum() (bool, error) {
-	duplicate := AsymetricEncryptDataMessage{
-		Data:     msg.Data,
-		Salt:     msg.Salt,
-		Checksum: [32]byte{},
-	}
-	duplicateBytes, err := duplicate.ToBytes()
-	if err != nil {
-		return false, err
-	}
-	calculatedChecksum := sha256.Sum256(duplicateBytes)
-	return slices.Equal(calculatedChecksum[:], msg.Checksum[:]), nil
 }
 
 func (msg *AsymetricEncryptDataMessage) ToBytes() ([]byte, error) {
