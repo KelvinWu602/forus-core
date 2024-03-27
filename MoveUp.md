@@ -32,7 +32,8 @@ There are two possible scenarios where moveUp should be called:
 
 ## MoveUpInvoluntarily(oldUUID, isNextProxy) Implementation
 1. Given the treeUUID, find the original_next and original_next_next in self.paths
-2. If isNextProxy == false: simply modify self.paths from {next: original_next, next_next: original_next_next}, {next: original_next, next_next: new_next_next}
-3. If isNextProxy == true: need to establish new tree
+2. If isNextProxy == false:
+    - simply modify self.paths from {next: original_next, next_next: original_next_next}, {next: original_next, next_next: new_next_next}
+4. If isNextProxy == true: need to establish new tree
     - remove oldPath {pathID: oldUUID} from self.paths
     - connectPath(original_next)
