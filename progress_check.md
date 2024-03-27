@@ -40,7 +40,9 @@
 
 ## func handleRealMessage()
 
-- verify behavior of asymmetricDecrypt, see if the module using a wrong private key to decrypt will report error (@SauDoge6597)
+- verify behavior of asymmetricDecrypt, see if the module using a wrong private key to decrypt will report error (@SauDoge6597) DONE
+  - Ecc will return a Invalid MAC Error if the wrong private key is used (refer to codec_test.go TestAsymmetricDecryptInWrongKey for an example)
+  - Rewrite AsymmetricDecrypt() to returning an "wrong private key" error as with an empty []byte as the decryption
 - store in ImmutableStorage (@KelvinWu602) - Done
 - call Forward (@KelvinWu602) - Done
 
@@ -80,7 +82,7 @@
 
 ## func initNodeDiscoverClient()
 
-- No need to cache the membners result, as it is expected to be frequently changing (@SauDoge6597)
+- No need to cache the membners result, as it is expected to be frequently changing (@SauDoge6597) DONE
 
 
 
