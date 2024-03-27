@@ -87,6 +87,10 @@ func (node *Node) checkPublishJobStatusWorker(jobID uuid.UUID, timeout time.Dura
 	node.markPublishJobStatus(jobID, publishJobProfile)
 }
 
+func (n *Node) checkMoveUpReqWorker(checkInterval time.Duration) {
+
+}
+
 func (node *Node) sendCoverMessageWorker(conn net.Conn, interval time.Duration, pathID uuid.UUID) {
 	log.Printf("sendCoverMessageWorker to %s is started successfully.\n", conn.RemoteAddr().String())
 

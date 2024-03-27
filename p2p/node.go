@@ -536,9 +536,16 @@ func (n *Node) Publish(key is.Key, message []byte) (uuid.UUID, error) {
 	// 1) Check tree formation status
 	// a) the node has connected to at least one path
 	// b) has at least k cover nodes
+
+	// In Case Move up() when trying to send a message
+	n.coversRWLock.Lock()
+	n.pathsRWLock.Lock()
 	if len(n.covers) < 10 || len(n.paths) < 1 {
+		defer n.coversRWLock.Unlock()
+		defer n.pathsRWLock.Unlock()
 		return uuid.Nil, errors.New("publishing condition not met")
 	}
+	n.coversRWLock.Unlock()
 	// 2) Validate the key
 	isValdiated := is.ValidateKey(key, message)
 	if !isValdiated {
@@ -555,6 +562,8 @@ func (n *Node) Publish(key is.Key, message []byte) (uuid.UUID, error) {
 			randomPathIdx = randomPathIdx - 1
 		}
 	}
+
+	n.pathsRWLock.Unlock()
 
 	// 4) encrypt the data message to application message
 	dataMessage := DataMessage{Key: key, Content: message}
