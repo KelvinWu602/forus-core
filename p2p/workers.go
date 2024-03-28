@@ -97,12 +97,15 @@ func (node *Node) checkPublishJobStatusWorker(jobID uuid.UUID, timeout time.Dura
 
 func (n *Node) checkMoveUpReqWorker(failureThreshold int, checkInterval time.Duration) {
 
-	// active check
-	// for every path, check if FailureCount > failureThreshold
-	// if true, move up
-	// if false, continue
-	go func() {
-		for {
+	checkDone := make(chan bool)
+	defer close(checkDone)
+
+	for {
+		go func() {
+			// active check
+			// for every path, check if FailureCount > failureThreshold
+			// if true, move up
+			// if false, continue
 			n.pathsRWLock.Lock()
 			for k, v := range n.paths {
 				v.pathStat.CountLock.Lock()
@@ -114,18 +117,10 @@ func (n *Node) checkMoveUpReqWorker(failureThreshold int, checkInterval time.Dur
 				}
 			}
 			n.pathsRWLock.Unlock()
-			time.Sleep(checkInterval)
-		}
-
-	}()
-
-	// passive check
-	// query every next hop and get their paths if the following exists:
-	// a) same tree uuid but self.next_next != resp.next
-	// b) tree uuid that is not in n.paths but resp.next == proxy
-	go func() {
-
-		for {
+			// passive check
+			// query every next hop and get their paths if the following exists:
+			// a) same tree uuid but self.next_next != resp.next
+			// b) tree uuid that is not in n.paths but resp.next == proxy
 			n.pathsRWLock.Lock()
 			for oldTreeUUID, oldPath := range n.paths {
 				resp, err := n.sendQueryPathRequest(oldPath.next)
@@ -155,10 +150,16 @@ func (n *Node) checkMoveUpReqWorker(failureThreshold int, checkInterval time.Dur
 				}
 			}
 			n.pathsRWLock.Unlock()
+			checkDone <- true
+		}()
 
+		select {
+		case <-checkDone:
 			time.Sleep(checkInterval)
+		case <-n.ctrlCSignalPropagator.Done():
+			return
 		}
-	}()
+	}
 
 }
 
