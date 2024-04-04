@@ -21,6 +21,7 @@ const (
 type PublishJobProfile struct {
 	Key    []byte
 	Status PublishJobStatus
+	OnPath uuid.UUID
 }
 
 // helper functions
@@ -28,8 +29,15 @@ type PublishJobProfile struct {
 
 func (node *Node) markPublishJobStatus(jobID uuid.UUID, profile PublishJobProfile) {
 	node.publishJobsRWLock.Lock()
+	node.paths[profile.OnPath].pathStat.CountLock.Lock()
 	defer node.publishJobsRWLock.Unlock()
+	defer node.paths[profile.OnPath].pathStat.CountLock.Unlock()
 	node.publishJobs[jobID] = profile
+	if profile.Status == SUCCESS {
+		node.paths[profile.OnPath].pathStat.WriteSuccessCount(1)
+	} else {
+		node.paths[profile.OnPath].pathStat.WriteFailureCount(1)
+	}
 }
 
 func (node *Node) removeCoversProfile(coverIp string) {
@@ -89,6 +97,74 @@ func (node *Node) checkPublishJobStatusWorker(jobID uuid.UUID) {
 		publishJobProfile.Status = TIMEOUT
 	}
 	node.markPublishJobStatus(jobID, publishJobProfile)
+}
+
+func (n *Node) checkMoveUpReqWorker(failureThreshold int, checkInterval time.Duration) {
+
+	checkDone := make(chan bool)
+	defer close(checkDone)
+
+	for {
+		go func() {
+			// active check
+			// for every path, check if FailureCount > failureThreshold
+			// if true, move up
+			// if false, continue
+			n.pathsRWLock.Lock()
+			for k, v := range n.paths {
+				v.pathStat.CountLock.Lock()
+				failureCount := v.pathStat.ReadFailureCount()
+				if failureCount < failureThreshold {
+					continue
+				} else {
+					go n.MoveUpVoluntarily(k)
+				}
+			}
+			n.pathsRWLock.Unlock()
+			// passive check
+			// query every next hop and get their paths if the following exists:
+			// a) same tree uuid but self.next_next != resp.next
+			// b) tree uuid that is not in n.paths but resp.next == proxy
+			n.pathsRWLock.Lock()
+			for oldTreeUUID, oldPath := range n.paths {
+				resp, err := n.sendQueryPathRequest(oldPath.next)
+				if err != nil {
+					continue // remove path from path profile
+				}
+				for _, newPath := range resp.Paths {
+					decryptedTreeUUID, err := DecryptUUID(newPath.EncryptedTreeUUID, n.privateKey)
+					if err != nil {
+						continue
+					}
+
+					path, ok := n.paths[decryptedTreeUUID]
+
+					if ok { // check (a)
+						if path.next2 != newPath.NextHop {
+							// the move up will need to modify oldTreeID by replacing originalNext2 with newNext2
+							go n.MoveUpInvoluntarily(oldTreeUUID, false, newPath.NextHop)
+						}
+					} else { // check (b)
+						if newPath.NextHop == "ImmutableStorage" {
+							// the move up will need to remove oldPath and connectPath with newTreeID
+							go n.MoveUpInvoluntarily(decryptedTreeUUID, true, oldPath.next)
+						}
+
+					}
+				}
+			}
+			n.pathsRWLock.Unlock()
+			checkDone <- true
+		}()
+
+		select {
+		case <-checkDone:
+			time.Sleep(checkInterval)
+		case <-n.ctrlCSignalPropagator.Done():
+			return
+		}
+	}
+
 }
 
 func (node *Node) sendCoverMessageWorker(conn net.Conn, interval time.Duration, pathID uuid.UUID) {

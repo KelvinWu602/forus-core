@@ -426,6 +426,7 @@ func (n *Node) ConnectPath(addr string, treeID uuid.UUID) (*ConnectPathResp, err
 			next2:       halfOpenPathProfile.next,
 			proxyPublic: halfOpenPathProfile.proxyPublic,
 			symKey:      resp.KeyExchange.GetSymKey(*myKeyExchangeSecret),
+			pathStat:    newPathStat(),
 		}
 
 		// Start the sendCoverMessageWorker
@@ -460,6 +461,7 @@ func (n *Node) CreateProxy(addr string) (*CreateProxyResp, error) {
 			next2:       "IPFS",
 			proxyPublic: resp.Public,
 			symKey:      resp.KeyExchange.GetSymKey(*myKeyExchangeSecret),
+			pathStat:    newPathStat(),
 		}
 		n.pathsRWLock.Unlock()
 
@@ -477,19 +479,77 @@ func (n *Node) DeletePath(addr string) {
 // END of ACTIONs =====================
 
 // TODO(@SauDoge) move up one step
-func (n *Node) MoveUp(addr string, uuid0 uuid.UUID) {
-	// send delete cover request
-	n.sendDeleteCoverRequest(addr)
+func (n *Node) MoveUpVoluntarily(uuid0 uuid.UUID) {
+	n.pathsRWLock.Lock()
+	defer n.pathsRWLock.Unlock()
 
-	// TODO (@SauDoge) store queued message to be sent out: probably also need some lock
+	value, ok := n.paths[uuid0]
+	if ok {
+		originalNext := value.next
+		originalNextNext := value.next2
+		// 1) send verifyCover(originalNext) to originNextNext
+		resp, err := n.sendVerifyCoverRequest(originalNextNext, originalNext)
+		if err != nil {
+			return
+		}
+		if resp.IsVerified {
+			// 2) check what originalNextNext is
+			if originalNextNext != "ImmutableStorage" {
+				// connectPath with originalNextNext
+				resp, _ := n.ConnectPath(originalNextNext, uuid0)
+				if resp.Status {
+					return
+				}
+			}
+		}
 
-	// TODO (@SauDoge) move up
-	newNext := n.paths[uuid0].next2
-	delete(n.paths, uuid0)
-	log.Printf("newNext is %s \n", newNext)
-	// switch case depend on newNext
-	// If newNext is node -> try connect
-	// If failed OR newNext is IPFS -> become proxy itself
+		// 3) if resp is not verified OR original Next Next== IPFS OR connectPath failed
+		// self becomes proxy
+		newPathProfile := &PathProfile{uuid: uuid.New(), next: "ImmutableStorage", next2: "", proxyPublic: n.publicKey, pathStat: newPathStat()}
+		n.removePathProfile(uuid0)
+		for k, v := range n.covers {
+			if v.treeUUID == uuid0 {
+				n.removeCoversProfile(k)
+			}
+		}
+		n.paths[newPathProfile.uuid] = *newPathProfile
+
+	} else {
+		return
+	}
+}
+
+func (n *Node) MoveUpInvoluntarily(treeID uuid.UUID, isNextProxy bool, newNextNext string) {
+
+	n.pathsRWLock.Lock()
+	defer n.pathsRWLock.Unlock()
+
+	if isNextProxy { // treeId is the new Tree ID, newNextNext is the IP of new Proxy
+
+		// find the path in n.paths that contains the new proxy and remove it
+		for idx, v := range n.paths {
+			if v.next == newNextNext {
+				n.removePathProfile(idx)
+				break
+			}
+		}
+		resp, _ := n.ConnectPath(newNextNext, treeID)
+		if resp.Status {
+			return
+		} else {
+			go n.MoveUpVoluntarily(treeID)
+		}
+
+	} else { // treeId is the old Tree ID, newNextNext =
+		value, ok := n.paths[treeID]
+		if ok {
+			// modify self.paths
+			value.next2 = newNextNext
+		} else {
+			return
+		}
+	}
+
 }
 
 func (n *Node) getNextHalfOpenPath() (*PathProfile, error) {
@@ -553,9 +613,16 @@ func (n *Node) Publish(key is.Key, message []byte) (uuid.UUID, error) {
 	// 1) Check tree formation status
 	// a) the node has connected to at least one path
 	// b) has at least k cover nodes
-	if len(n.covers) < NUMBER_OF_COVER_NODES_FOR_PUBLISH || len(n.paths) < 1 {
+
+	// In Case Move up() when trying to send a message
+	n.coversRWLock.Lock()
+	n.pathsRWLock.Lock()
+	if len(n.covers) < 10 || len(n.paths) < 1 {
+		defer n.coversRWLock.Unlock()
+		defer n.pathsRWLock.Unlock()
 		return uuid.Nil, errors.New("publishing condition not met")
 	}
+	n.coversRWLock.Unlock()
 	// 2) Validate the key
 	isValdiated := is.ValidateKey(key, message)
 	if !isValdiated {
@@ -564,6 +631,8 @@ func (n *Node) Publish(key is.Key, message []byte) (uuid.UUID, error) {
 	// 3) Pick a path
 	pathID, randomPathProfile := pick(n.paths, n.pathsRWLock)
 	conn := *n.openConnections[pathID]
+
+	n.pathsRWLock.Unlock()
 
 	// 4) encrypt the data message to application message
 	dataMessage := DataMessage{Key: key, Content: message}
@@ -581,9 +650,9 @@ func (n *Node) Publish(key is.Key, message []byte) (uuid.UUID, error) {
 
 	// 6) update the publishingJob map
 	n.publishJobsRWLock.Lock()
-	defer n.publishJobsRWLock.Unlock()
 	newJobID := uuid.New()
-	n.publishJobs[newJobID] = PublishJobProfile{Key: key[:], Status: PENDING}
+	n.publishJobs[newJobID] = PublishJobProfile{Key: key[:], Status: PENDING, OnPath: randomPathProfile.uuid}
+	n.publishJobsRWLock.Unlock()
 
 	// 7) initiate checkPublishJobStatusWorker()
 	go n.checkPublishJobStatusWorker(newJobID)
