@@ -125,7 +125,7 @@ func (n *Node) checkMoveUpReqWorker(failureThreshold int, checkInterval time.Dur
 			for oldTreeUUID, oldPath := range n.paths {
 				resp, err := n.sendQueryPathRequest(oldPath.next)
 				if err != nil {
-					continue
+					continue // remove path from path profile
 				}
 				for _, newPath := range resp.Paths {
 					decryptedTreeUUID, err := DecryptUUID(newPath.EncryptedTreeUUID, n.privateKey)
