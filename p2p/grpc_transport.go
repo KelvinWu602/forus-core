@@ -5,21 +5,16 @@ import (
 	"log"
 	"time"
 
+	"github.com/KelvinWu602/immutable-storage/blueprint"
 	isProtos "github.com/KelvinWu602/immutable-storage/protos"
 	ndProtos "github.com/KelvinWu602/node-discovery/protos"
 	"google.golang.org/grpc"
 )
 
 // This handles connections with ND and IS
-
-const (
-	NDAddr = ":3200"
-	ISAddr = ":3100"
-)
-
 type NodeDiscoveryClient struct {
-	client  ndProtos.NodeDiscoveryClient
-	members []string
+	client ndProtos.NodeDiscoveryClient
+	// members []string
 }
 
 type ImmutableStorageClient struct {
@@ -27,7 +22,7 @@ type ImmutableStorageClient struct {
 }
 
 func (nc *NodeDiscoveryClient) New() {
-	conn, err := grpc.Dial(NDAddr)
+	conn, err := grpc.Dial(NODE_DISCOVERY_SERVER_LISTEN_PORT, grpc.WithInsecure())
 	if err != nil {
 		log.Fatalf("Cannot connect to Node Discovery: %s \n", err)
 	}
@@ -54,17 +49,17 @@ func (nc *NodeDiscoveryClient) GetMembers() (*ndProtos.GetMembersReponse, error)
 }
 
 func (ic *ImmutableStorageClient) New() {
-	conn, err := grpc.Dial(ISAddr)
+	conn, err := grpc.Dial(IMMUTABLE_STORAGE_SERVER_LISTEN_PORT, grpc.WithInsecure())
 	if err != nil {
 		log.Fatalf("Cannot connect to Immutable Storage: %s \n", err)
 	}
 	ic.client = isProtos.NewImmutableStorageClient(conn)
 }
 
-func (ic *ImmutableStorageClient) Store(key []byte, body []byte) (*isProtos.StoreResponse, error) {
+func (ic *ImmutableStorageClient) Store(key blueprint.Key, body []byte) (*isProtos.StoreResponse, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	return ic.client.Store(ctx, &isProtos.StoreRequest{Key: key, Content: body})
+	return ic.client.Store(ctx, &isProtos.StoreRequest{Key: key[:], Content: body})
 }
 
 func (ic *ImmutableStorageClient) Read(key []byte) (*isProtos.ReadResponse, error) {
@@ -88,13 +83,13 @@ func (ic *ImmutableStorageClient) IsDiscovered(key []byte) (*isProtos.IsDiscover
 func initNodeDiscoverClient() *NodeDiscoveryClient {
 	nd := &NodeDiscoveryClient{}
 	nd.New()
-	resp, err := nd.GetMembers()
+	_, err := nd.GetMembers()
 	if err != nil {
 		log.Fatalf("Cannot get member from node discovery %s \n", err)
 	}
 
 	// iterate until the first alive member
-	nd.members = resp.Member
+	// nd.members = resp.Member
 	return nd
 }
 

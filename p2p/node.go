@@ -1,359 +1,654 @@
 package p2p
 
 import (
-	"crypto/rsa"
+	"bytes"
+	"context"
 	"encoding/gob"
 	"encoding/json"
 	"errors"
 	"log"
+	"math/big"
+	"math/rand"
 	"net"
 	"net/http"
 	"sync"
 	"time"
 
+	is "github.com/KelvinWu602/immutable-storage/blueprint"
 	"github.com/google/uuid"
 )
 
 type Node struct {
 	// Info members
-	paths       map[uuid.UUID]PathProfile
-	covers      map[string]CoverNodeProfile
-	publicKey   rsa.PublicKey
-	privateKey  rsa.PrivateKey
-	keyExchange DHKeyExchange
-	// TODO(@SauDoge) make sure no future connection init by n connects to any paths of covers
+	paths           map[uuid.UUID]PathProfile
+	openConnections map[uuid.UUID]*net.Conn
+	halfOpenPath    map[uuid.UUID]PathProfile
+	covers          map[string]CoverNodeProfile
+	publishJobs     map[uuid.UUID]PublishJobProfile
+	peerPublicKeys  map[string][]byte
+	publicKey       []byte
+	privateKey      []byte
 
-	// Temp info members
-	// Is a lock needed?
-	halfOpenPath PathProfile
-	tempQueue    chan Message
-	isVerified   chan bool
-	isConnected  chan bool
+	// Synchronization
+	pathsRWLock           *sync.RWMutex // should acquire a Read lock whenever reading paths content
+	openConnectionsRWLock *sync.RWMutex // should acquire a Read lock whenever reading openConnections content
+	halfOpenPathsRWLock   *sync.RWMutex // should acquire a Read lock whenever reading halfOpenPaths content
+	publishJobsRWLock     *sync.RWMutex // should acquire a Read lock whenever reading publishJobs content
+	coversRWLock          *sync.RWMutex // should acquire a Read lock whenever reading covers content
+	peerPublicKeysRWLock  *sync.RWMutex // should acquire a Read lock whenever reading peerPublicKeys content
 
-	// Internode Control members
-	t          *TCPTransport
-	msgChan    chan *DirectionalCM
-	peers      map[string]*TCPPeer // a peer is another core
-	addPeer    chan *TCPPeer
-	removePeer chan *TCPPeer
-	peerLock   sync.RWMutex
+	// ConnectPath Scheduler
+	pendingHalfOpenPaths chan uuid.UUID
 
 	// grpc member
 	ndClient NodeDiscoveryClient
 	isClient ImmutableStorageClient
 }
 
-func MakeServerAndStart(addr string) {
-	s := New(addr)
+func MakeServerAndStart() {
+	s := New()
+
 	go s.StartTCP()
+
+	// A blocking function, return after connected to 3 paths
+	s.formTree()
+
 	go s.StartHTTP()
-
-	// TODO(@SauDoge): get into at least one path using tree formation
-	for _, member := range s.ndClient.members {
-		ok := s.formTree(member)
-		if ok {
-			break
-		}
-	}
-
-	// TODO(@SauDoge) Periodic Cover Message
-
+	go s.checkMoveUpReqWorker()
 }
 
 // New() creates a new node
 // This should only be called once for every core
-func New(addr string) *Node {
+func New() *Node {
 
 	// Generate Asymmetric Key Pair
-	public, private := generateAsymmetricKey()
+	public, private, err := GenerateAsymmetricKeyPair()
+	if err != nil {
+		log.Printf("Can't generate asymmetric Key Pairs")
+	}
 
 	nd := initNodeDiscoverClient()
 	is := initImmutableStorageClient()
 	// Tree Formation is delayed until the start of TCP server first to receive CM resp
-	tr := NewTCPTransport(addr)
 
 	self := &Node{
-		publicKey:  *public,
-		privateKey: *private,
-		paths:      make(map[uuid.UUID]PathProfile),
-		covers:     make(map[string]CoverNodeProfile),
-		msgChan:    make(chan *DirectionalCM),
-		peers:      make(map[string]*TCPPeer),
-		addPeer:    make(chan *TCPPeer),
-		removePeer: make(chan *TCPPeer),
-		isVerified: make(chan bool),
+		publicKey:  public,
+		privateKey: private,
+
+		paths:           make(map[uuid.UUID]PathProfile),
+		openConnections: make(map[uuid.UUID]*net.Conn),
+		halfOpenPath:    make(map[uuid.UUID]PathProfile),
+		covers:          make(map[string]CoverNodeProfile),
+		publishJobs:     make(map[uuid.UUID]PublishJobProfile),
+		peerPublicKeys:  make(map[string][]byte),
+
+		pathsRWLock:           &sync.RWMutex{},
+		openConnectionsRWLock: &sync.RWMutex{},
+		halfOpenPathsRWLock:   &sync.RWMutex{},
+		publishJobsRWLock:     &sync.RWMutex{},
+		coversRWLock:          &sync.RWMutex{},
+		peerPublicKeysRWLock:  &sync.RWMutex{},
+
+		pendingHalfOpenPaths: make(chan uuid.UUID, 512),
+
+		ndClient: *nd,
+		isClient: *is,
 	}
 
-	self.t = tr
-	self.keyExchange = NewKeyExchange(self.publicKey)
+	initGobTypeRegistration()
 
-	tr.AddPeer = self.addPeer
-	tr.RemovePeer = self.removePeer
-
-	self.ndClient = *nd
-	self.isClient = *is
 	return self
-}
-
-// StartTCP() starts the internode communicating TCP
-func (n *Node) StartTCP() {
-	go n.loop()
-
-	log.Printf("Node starts at %s \n", n.t.listenAddr)
-
-	err := n.t.ListenAndAccept()
-	if err != nil {
-		log.Fatalf("failed to listen: %s \n", err)
-	}
 }
 
 // StartTCP() starts the HTTP server for client
 func (n *Node) StartHTTP() {
 	// Start HTTP server for web client
 	log.Printf("start http called \n")
-	hs := NewHTTPTransport(":3000")
+	hs := NewHTTPTransport(HTTP_SERVER_LISTEN_PORT)
 
-	hs.mux.HandleFunc("/Join", n.handleJoinCluster)
-	hs.mux.HandleFunc("/Leave", n.handleLeaveCluster)
 	hs.mux.HandleFunc("/GetMessage", n.handleGetMessage)
 	hs.mux.HandleFunc("/PostMessage", n.handlePostMessage)
 
 	go hs.StartServer()
 }
 
-func (n *Node) AddPeer(p *TCPPeer) {
-	// lock to avoid concurrent add peers affect the state
-	n.peerLock.Lock()
-	defer n.peerLock.Unlock()
-	n.peers[p.listenAddr] = p
+// StartTCP() starts the internode communicating TCP
+func (n *Node) StartTCP() {
+	listenAddr := TCP_SERVER_LISTEN_PORT
+	log.Printf("Node starts at %s \n", listenAddr)
 
-}
+	listener, err := net.Listen("tcp", listenAddr)
+	if err != nil {
+		log.Fatalf("failed to listen: %s \n", err)
+	}
 
-// loop() is the recv-end of the Node
-// it handles three scenarios
-//  1. a new peer is added to the node when they try to connect with the node
-//     the channel is to be triggered when a new connection comes in
-//  2. when a new peer is leaving the node
-//  3. a peer sent a control message to the node
-func (n *Node) loop() {
 	for {
-		select {
-		case peer := <-n.addPeer:
-			log.Printf("new peer for node %s \n", n.t.listenAddr)
-			if err := n.handleNewPeer(peer); err != nil {
-				log.Fatalf("handle new peer error %s \n", err)
-			}
-
-		// TODO (@SauDoge) when should removePeer be done
-		case peer := <-n.removePeer:
-			log.Printf("removePeer channel of node sends trigger")
-			delete(n.peers, peer.conn.RemoteAddr().String())
-
-		case msg := <-n.msgChan:
-			go func() {
-				err := n.handleMessage(msg)
-				if err != nil {
-					log.Fatalf("handleMessage error %s \n", err)
-				}
-			}()
+		conn, err := listener.Accept()
+		if err != nil {
+			log.Printf("[TCP Listener.Accept]: Error: %v\n", err)
+			continue
 		}
+		log.Printf("tcp server %s recv conn from %s \n", conn.LocalAddr().String(), conn.RemoteAddr().String())
+
+		// Create a request handler
+		go n.handleConnection(conn)
 	}
 }
 
-// Whenever a new peer enters, trigger a readLoop
-func (n *Node) handleNewPeer(peer *TCPPeer) error {
-	go peer.ReadLoop(n.msgChan)
-
-	// if the peer is an incoming node i.e outbound == false
-	if peer.outbound {
-		log.Printf("server %s recv conn from %s \n", peer.conn.RemoteAddr().String(), peer.conn.LocalAddr().String())
-	} else {
-		log.Printf("server %s recv conn from %s \n", peer.conn.LocalAddr().String(), peer.conn.RemoteAddr().String())
+func (n *Node) handleConnection(conn net.Conn) {
+	// extract the incoming message from the connection
+	msg := ProtocolMessage{}
+	err := gob.NewDecoder(conn).Decode(&msg)
+	if err != nil {
+		log.Printf("Error when handling connection from %s", conn.RemoteAddr().String())
+		defer conn.Close()
+		return
 	}
-
-	// modify peer map
-	n.AddPeer(peer)
-
-	return nil
+	err = n.handleMessage(conn, msg)
+	if err != nil {
+		log.Printf("Error when handling message from %s, message = %v", conn.RemoteAddr().String(), msg)
+	}
 }
 
 // A switch between handlers
-func (n *Node) handleMessage(msg *DirectionalCM) error {
-	switch msg.cm.ControlType {
-	case "queryPathRequest":
-		return n.handleQueryPathReq(msg.p.conn, msg.cm.ControlContent.(*QueryPathReq))
-	case "queryPathResponse":
-		return n.handleQueryPathResp(msg.p.conn, msg.cm.ControlContent.(*QueryPathResp))
-	case "verifyCoverRequest":
-		return n.handleVerifyCoverReq(msg.p.conn, msg.cm.ControlContent.(*VerifyCoverReq))
-	case "verifyCoverResponse":
-		return n.handleVerifyCoverResp(msg.p.conn, msg.cm.ControlContent.(*VerifyCoverResp))
-	case "connectPathRequest":
-		return n.handleConnectPathReq(msg.p.conn, msg.cm.ControlContent.(*ConnectPathReq))
-	case "connectPathResponse":
-		return n.handleConnectPathResp(msg.p.conn, msg.cm.ControlContent.(*ConnectPathResp))
-	case "createProxyRequest":
-		return n.handleCreateProxyReq(msg.p.conn, msg.cm.ControlContent.(*CreateProxyReq))
-	case "createProxyResponse":
-		return n.handleCreateProxyResp(msg.p.conn, msg.cm.ControlContent.(*CreateProxyResp))
-	case "deleteCoverRequest":
-		return n.handleDeleteCoverReq(msg.p.conn, msg.cm.ControlContent.(*DeleteCoverReq))
-	default:
-		return nil
+func (n *Node) handleMessage(conn net.Conn, msg ProtocolMessage) error {
+	// close connection no matter what
+	defer conn.Close()
+
+	switch msg.Type {
+	case QueryPathRequest:
+		if req, castSuccess := msg.Content.(QueryPathReq); castSuccess {
+			return n.handleQueryPathReq(conn, &req)
+		}
+	case VerifyCoverRequest:
+		if req, castSuccess := msg.Content.(VerifyCoverReq); castSuccess {
+			return n.handleVerifyCoverReq(conn, &req)
+		}
+	case ConnectPathRequest:
+		if req, castSuccess := msg.Content.(ConnectPathReq); castSuccess {
+			return n.handleConnectPathReq(conn, &req)
+		}
+
+	case CreateProxyRequest:
+		if req, castSuccess := msg.Content.(CreateProxyReq); castSuccess {
+			return n.handleCreateProxyReq(conn, &req)
+		}
+
+	case DeleteCoverRequest:
+		if req, castSuccess := msg.Content.(DeleteCoverReq); castSuccess {
+			return n.handleDeleteCoverReq(conn, &req)
+		}
+
 	}
+	return errors.New("invalid incoming ProtocolMessage")
 }
 
-// Establish connection before any control messages
-func (n *Node) ConnectTo(addr string) net.Conn {
-	conn, err := net.Dial("tcp", addr)
+// A setup function for gob package to pre-register all encoding types before any sending tcp requests
+// TODO: Update the types and check if any missing types.
+func initGobTypeRegistration() {
+	gob.Register(&QueryPathReq{})
+	gob.Register(&DHKeyExchange{})
+	gob.Register(&ConnectPathReq{})
+	gob.Register(&CreateProxyReq{})
+	gob.Register(&DeleteCoverReq{})
+	gob.Register(&Path{})
+	gob.Register(&QueryPathResp{})
+	gob.Register(&VerifyCoverReq{})
+	gob.Register(&VerifyCoverResp{})
+	gob.Register(&ConnectPathResp{})
+	gob.Register(&DHKeyExchange{})
+	gob.Register(&CreateProxyResp{})
+	gob.Register(&ProtocolMessage{})
+	gob.Register(&ApplicationMessage{})
+}
+
+// A generic function used to send tcp requests and wait for response with a timeout.
+func tcpSendAndWaitResponse[RESPONSE_TYPE any](reqBody *ProtocolMessage, destAddr string, keepAlive bool) (*RESPONSE_TYPE, *net.Conn, error) {
+	conn, err := net.Dial("tcp", destAddr)
+	defer func() {
+		if !keepAlive {
+			conn.Close()
+		}
+	}()
 	if err != nil {
-		log.Fatalf("self connect node failed %s \n", err)
-		return nil
+		log.Printf("error when dial tcp addr: %s \n", err)
+		return nil, nil, err
 	}
-	peer := &TCPPeer{
-		conn:     conn,
-		outbound: true,
+	defer conn.Close()
+
+	err = gob.NewEncoder(conn).Encode(*reqBody)
+	if err != nil {
+		log.Printf("Error when sending tcp request: %s \n", err)
+		return nil, nil, err
 	}
 
-	n.addPeer <- peer
-
-	// conn.Close()
-	return conn
+	response, err := waitForResponse[RESPONSE_TYPE](conn)
+	if err != nil {
+		log.Printf("Error when receiving tcp request: %s \n", err)
+		return nil, nil, err
+	}
+	return response, &conn, nil
 }
 
-func (n *Node) QueryPath(conn net.Conn) {
+// A generic function used to wait for tcp response.
+func waitForResponse[RESPONSE_TYPE any](conn net.Conn) (*RESPONSE_TYPE, error) {
+	errTimeout := errors.New("tcp request timeout")
 
-	queryPathRequest := ControlMessage{
-		ControlType: "queryPathRequest",
-		ControlContent: QueryPathReq{
-			N3PublicKey: n.publicKey,
+	doneSuccess := make(chan RESPONSE_TYPE)
+	doneError := make(chan error)
+	go func() {
+		response := new(RESPONSE_TYPE)
+		err := gob.NewDecoder(conn).Decode(&response)
+		if err != nil {
+			doneError <- err
+		} else {
+			doneSuccess <- *response
+		}
+	}()
+	select {
+	case resp := <-doneSuccess:
+		return &resp, nil
+	case err := <-doneError:
+		return nil, err
+	case <-time.After(TCP_REQUEST_TIMEOUT):
+		return nil, errTimeout
+	}
+}
+
+// All the functions responsible for sending TCP ProtocolMessages
+// sendQueryPathRequest
+// sendVerifyCoverRequest
+// sendConnectPathRequest
+// sendCreateProxyRequest
+// sendDeleteCoverRequest
+
+func (n *Node) sendQueryPathRequest(addr string) (*QueryPathResp, error) {
+	queryPathRequest := ProtocolMessage{
+		Type: QueryPathRequest,
+		Content: QueryPathReq{
+			PublicKey: n.publicKey,
+		},
+	}
+	resp, _, err := tcpSendAndWaitResponse[QueryPathResp](&queryPathRequest, addr, false)
+	return resp, err
+}
+
+func (n *Node) sendVerifyCoverRequest(addr string, coverToBeVerified string) (*VerifyCoverResp, error) {
+	verifyCoverRequest := ProtocolMessage{
+		Type: VerifyCoverRequest,
+		Content: VerifyCoverReq{
+			NextHop: coverToBeVerified,
+		},
+	}
+	resp, _, err := tcpSendAndWaitResponse[VerifyCoverResp](&verifyCoverRequest, addr, false)
+	return resp, err
+}
+
+func (n *Node) sendConnectPathRequest(addr string, treeID uuid.UUID, n3X DHKeyExchange) (*ConnectPathResp, *net.Conn, error) {
+	n.peerPublicKeysRWLock.RLock()
+	targetPublicKey, found := n.peerPublicKeys[addr]
+	n.peerPublicKeysRWLock.RUnlock()
+	if !found {
+		return nil, nil, errors.New("public key of " + addr + " is unknown")
+	}
+
+	encryptedTreeUUID, err := EncryptUUID(treeID, targetPublicKey)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	connectPathReq := ProtocolMessage{
+		Type: ConnectPathRequest,
+		Content: ConnectPathReq{
+			EncryptedTreeUUID: encryptedTreeUUID,
+			KeyExchange:       n3X,
 		},
 	}
 
-	// Need to make sure ReadLoop is running before sending it out
-
-	/*
-		queryPathRequest := &TestingMessage{10}
-	*/
-	// log.Printf("%s \n", queryPathRequest.ControlType)
-	// log.Printf("%s \n", queryPathRequest.ControlContent)
-	gob.Register(new(rsa.PublicKey))
-	gob.Register(new(QueryPathReq))
-	err := gob.NewEncoder(conn).Encode(queryPathRequest)
-	if err != nil {
-		log.Fatalf("something is wrong when sending encoded: %s \n", err)
-	}
-}
-
-func (n *Node) ConnectPath(conn net.Conn, treeID uuid.UUID, n3X DHKeyExchange) {
-
-	gob.Register(new(DHKeyExchange))
-	gob.Register(new(ConnectPathReq))
-	connectPathReq := ControlMessage{
-		ControlType: "connectPathRequst",
-		ControlContent: ConnectPathReq{
-			TreeUUID:       treeID,
-			ReqKeyExchange: n3X,
-		},
-	}
-	gob.NewEncoder(conn).Encode(connectPathReq)
+	return tcpSendAndWaitResponse[ConnectPathResp](&connectPathReq, addr, true)
 }
 
 // TODO(@SauDoge) request a proxy triggered by empty path in pathResp
-func (n *Node) RequestProxy(conn net.Conn, n3X DHKeyExchange) {
-	createProxyRequest := ControlMessage{
-		ControlType: "createProxyRequest",
-		ControlContent: CreateProxyReq{
-			ReqKeyExchange: n3X,
-			ReqPublicKey:   n.publicKey,
+func (n *Node) sendCreateProxyRequest(addr string, n3X DHKeyExchange) (*CreateProxyResp, *net.Conn, error) {
+	createProxyRequest := ProtocolMessage{
+		Type: CreateProxyRequest,
+		Content: CreateProxyReq{
+			KeyExchange: n3X,
+			PublicKey:   n.publicKey,
 		},
 	}
 
-	gob.Register(new(CreateProxyReq))
-	gob.NewEncoder(conn).Encode(createProxyRequest)
+	return tcpSendAndWaitResponse[CreateProxyResp](&createProxyRequest, addr, true)
 }
+
+func (n *Node) sendDeleteCoverRequest(addr string) {
+	deleteCoverRequest := ProtocolMessage{
+		Type:    DeleteCoverRequest,
+		Content: DeleteCoverReq{},
+	}
+
+	// Ignore any error, as we do not expect response
+	if conn, err := net.Dial("tcp", addr); err == nil {
+		defer conn.Close()
+		gob.NewEncoder(conn).Encode(deleteCoverRequest)
+	}
+}
+
+// ACTIONS function, including:
+// 1. QueryPath
+// 2. ConnectPath
+// 3. CreateProxy
+// 4. DeletePath
+
+// ACTIONS vs sendXXXRequest:
+// sendXXXRequest is just one of the steps of an ACTION, which simply sends out a request struct, and wait for a response struct to return.
+// An ACTION, on the other hand, further process the response struct(optional) based on the ACTION type.
+// ACTION is considered atomic and can self-rollback in case of failure.
+// Only ACTION functions can directly call sendXXXRequest functions. All other functions suppose to call ACTION functions only.
+
+func (n *Node) QueryPath(addr string) (*QueryPathResp, error) {
+	resp, err := n.sendQueryPathRequest(addr)
+	if err == nil {
+		// Cache the public key
+		n.peerPublicKeysRWLock.Lock()
+		defer n.peerPublicKeysRWLock.Unlock()
+		n.peerPublicKeys[addr] = resp.NodePublicKey
+
+		// Cache the verified paths as 'halfOpenPaths'
+		paths := resp.Paths
+		for _, path := range paths {
+			pathID, err := DecryptUUID(path.EncryptedTreeUUID, n.privateKey)
+			if err != nil {
+				continue
+			}
+			halfOpenPath := PathProfile{
+				uuid:        pathID,
+				next:        addr,
+				next2:       path.NextHop,
+				proxyPublic: path.ProxyPublicKey,
+				symKey:      big.Int{}, // placeholder
+			}
+			// Ask my next-next hop to verify if my next-hop is one of its cover nodes
+			verifyCoverResp, err := n.sendVerifyCoverRequest(halfOpenPath.next2, halfOpenPath.next)
+			if err == nil && verifyCoverResp.IsVerified {
+				n.halfOpenPathsRWLock.Lock()
+				n.halfOpenPath[pathID] = halfOpenPath
+				n.halfOpenPathsRWLock.Unlock()
+
+				n.pendingHalfOpenPaths <- halfOpenPath.uuid
+			}
+		}
+	}
+	return resp, err
+}
+
+func (n *Node) ConnectPath(addr string, treeID uuid.UUID) (*ConnectPathResp, error) {
+	// Generate Key Exchange Information on the fly
+	lenInByte := 32
+	myKeyExchangeSecret := RandomBigInt(lenInByte)
+	keyExchangeInfo := NewKeyExchange(*myKeyExchangeSecret)
+
+	resp, connPtr, err := n.sendConnectPathRequest(addr, treeID, keyExchangeInfo)
+	if err != nil {
+		return resp, err
+	}
+
+	if resp.Status {
+		n.halfOpenPathsRWLock.Lock()
+		n.pathsRWLock.Lock()
+		n.openConnectionsRWLock.Lock()
+		defer n.halfOpenPathsRWLock.Unlock()
+		defer n.pathsRWLock.Unlock()
+		defer n.openConnectionsRWLock.Unlock()
+
+		// retrieve the half open path profile
+		halfOpenPathProfile, found := n.halfOpenPath[treeID]
+		if !found {
+			return resp, errors.New("halfOpenPath not found")
+		}
+		// delete the half open path profile, as it is completely 'open'.
+		delete(n.halfOpenPath, treeID)
+
+		// create new path profile
+		n.paths[treeID] = PathProfile{
+			uuid:        treeID,
+			next:        addr,
+			next2:       halfOpenPathProfile.next,
+			proxyPublic: halfOpenPathProfile.proxyPublic,
+			symKey:      resp.KeyExchange.GetSymKey(*myKeyExchangeSecret),
+			pathStat:    newPathStat(),
+		}
+
+		// Start the sendCoverMessageWorker
+		go n.sendCoverMessageWorker(*connPtr, COVER_MESSAGE_SENDING_INTERVAL, treeID)
+		// Store a pointer to the opened tcp connection for later publish jobs
+		n.openConnections[treeID] = connPtr
+	}
+	return resp, nil
+}
+
+func (n *Node) CreateProxy(addr string) (*CreateProxyResp, error) {
+	// Generate Key Exchange Information on the fly
+	lenInByte := 32
+	myKeyExchangeSecret := RandomBigInt(lenInByte)
+	keyExchangeInfo := NewKeyExchange(*myKeyExchangeSecret)
+
+	resp, connPtr, err := n.sendCreateProxyRequest(addr, keyExchangeInfo)
+	if err != nil {
+		return resp, err
+	}
+
+	if resp.Status {
+		treeID, err := DecryptUUID(resp.EncryptedTreeUUID, n.privateKey)
+		if err != nil {
+			return nil, errors.New("malformed encryptedTreeUUID")
+		}
+		n.pathsRWLock.Lock()
+		// create new path profile
+		n.paths[treeID] = PathProfile{
+			uuid:        treeID,
+			next:        addr,
+			next2:       "IPFS",
+			proxyPublic: resp.Public,
+			symKey:      resp.KeyExchange.GetSymKey(*myKeyExchangeSecret),
+			pathStat:    newPathStat(),
+		}
+		n.pathsRWLock.Unlock()
+
+		// Start the sendCoverMessageWorker
+		go n.sendCoverMessageWorker(*connPtr, COVER_MESSAGE_SENDING_INTERVAL, treeID)
+	}
+	return resp, nil
+}
+
+func (n *Node) DeletePath(addr string) {
+	n.sendDeleteCoverRequest(addr)
+	//TODO
+}
+
+// END of ACTIONs =====================
 
 // TODO(@SauDoge) move up one step
-func (n *Node) MoveUp(conn net.Conn, uuid0 uuid.UUID) {
+func (n *Node) MoveUpVoluntarily(uuid0 uuid.UUID) {
+	n.pathsRWLock.Lock()
+	defer n.pathsRWLock.Unlock()
 
-	// send delete cover request
-	deleteCoverRequest := ControlMessage{
-		ControlType: "deleteCoverRequest",
-		ControlContent: DeleteCoverReq{
-			Status: true,
-		},
-	}
-	gob.Register(new(DeleteCoverReq))
-	gob.NewEncoder(conn).Encode(deleteCoverRequest)
-
-	// close the connection
-	conn.Close()
-
-	// TODO (@SauDoge) store queued message to be sent out: probably also need some lock
-
-	// TODO (@SauDoge) move up
-	newNext := n.paths[uuid0].next2
-	delete(n.paths, uuid0)
-	log.Printf("newNext is %s \n", newNext)
-	// switch case depend on newNext
-	// If newNext is node -> try connect
-	// If failed OR newNext is IPFS -> find a new Cluster
-	// If no new cluster -> become proxy itself
-
-}
-
-// TODO(@SauDoge) Tree Formation Process by aggregating QueryPath, CreateProxy, ConnectPath & joining cluster
-func (n *Node) formTree(addr string) bool {
-	// 1. After finding the address with addr, ConnectTo
-	conn := n.ConnectTo(addr)
-	// 2. QueryPath + VerifyPath
-	n.QueryPath(conn)
-	//	if (2) is successful, ConnectPath
-	verified := <-n.isVerified
-	if verified {
-		n.ConnectPath(conn, n.halfOpenPath.uuid, n.keyExchange)
-	} else {
-		return false
-	}
-	connected := <-n.isConnected
-	return connected
-}
-
-// TODO(@SauDoge)
-func (n *Node) Publish(key string, message []byte) error {
-	// 1) Check if a) the node has connected to at least one path b) has at least k cover nodes
-	if len(n.covers) < 10 || len(n.paths) < 1 {
-		return errors.New("publishing condition not met")
-	}
-	//	2.1)call IS.store(key, message) and wait for sometime before confirming with IS
-	// 		2.1.1) If key exists in IS: return nil as no error
-	// 		2.1.2) If key does not exist: return error as publishing failed
-	// 	2.2) If failed: send to next node in the path with the asym decrypt the same and sym decrypt renewed
-
-	resp, _ := n.isClient.Store([]byte(key), message)
-	if resp.Success {
-		// check with is if the key exists
-		keyCheckNoti := make(chan error, 1)
-		go func() {
-			time.Sleep(10 * time.Second)
-			// search key
-			discoveredResp, _ := n.isClient.IsDiscovered([]byte(key))
-			if discoveredResp.IsDiscovered {
-				keyCheckNoti <- nil
-			} else {
-				keyCheckNoti <- errors.New("publishing failed")
-			}
-		}()
-		select {
-		case keyCheck := <-keyCheckNoti:
-			return keyCheck
-		case <-time.After(15 * time.Second):
-			return errors.New("publishing failed")
+	value, ok := n.paths[uuid0]
+	if ok {
+		originalNext := value.next
+		originalNextNext := value.next2
+		// 1) send verifyCover(originalNext) to originNextNext
+		resp, err := n.sendVerifyCoverRequest(originalNextNext, originalNext)
+		if err != nil {
+			return
 		}
+		if resp.IsVerified {
+			// 2) check what originalNextNext is
+			if originalNextNext != "ImmutableStorage" {
+				// connectPath with originalNextNext
+				resp, _ := n.ConnectPath(originalNextNext, uuid0)
+				if resp.Status {
+					return
+				}
+			}
+		}
+
+		// 3) if resp is not verified OR original Next Next== IPFS OR connectPath failed
+		// self becomes proxy
+		newPathProfile := &PathProfile{uuid: uuid.New(), next: "ImmutableStorage", next2: "", proxyPublic: n.publicKey, pathStat: newPathStat()}
+		n.removePathProfile(uuid0)
+		for k, v := range n.covers {
+			if v.treeUUID == uuid0 {
+				n.removeCoversProfile(k)
+			}
+		}
+		n.paths[newPathProfile.uuid] = *newPathProfile
+
 	} else {
-		return errors.New("Store failed")
+		return
 	}
-	return nil
+}
+
+func (n *Node) MoveUpInvoluntarily(treeID uuid.UUID, isNextProxy bool, newNextNext string) {
+
+	n.pathsRWLock.Lock()
+	defer n.pathsRWLock.Unlock()
+
+	if isNextProxy { // treeId is the new Tree ID, newNextNext is the IP of new Proxy
+
+		// find the path in n.paths that contains the new proxy and remove it
+		for idx, v := range n.paths {
+			if v.next == newNextNext {
+				n.removePathProfile(idx)
+				break
+			}
+		}
+		resp, _ := n.ConnectPath(newNextNext, treeID)
+		if resp.Status {
+			return
+		} else {
+			go n.MoveUpVoluntarily(treeID)
+		}
+
+	} else { // treeId is the old Tree ID, newNextNext =
+		value, ok := n.paths[treeID]
+		if ok {
+			// modify self.paths
+			value.next2 = newNextNext
+		} else {
+			return
+		}
+	}
+
+}
+
+func (n *Node) getNextHalfOpenPath() (*PathProfile, error) {
+	var result PathProfile
+	var found bool
+	alreadyConnected := true
+	for alreadyConnected {
+		halfOpenPathID := <-n.pendingHalfOpenPaths
+		n.halfOpenPathsRWLock.RLock()
+		n.pathsRWLock.RLock()
+		defer n.halfOpenPathsRWLock.RUnlock()
+		defer n.pathsRWLock.RUnlock()
+		result, found = n.halfOpenPath[halfOpenPathID]
+		_, alreadyConnected = n.paths[halfOpenPathID]
+	}
+	if found && !alreadyConnected {
+		return &result, nil
+	} else {
+		return nil, errors.New("half open path not found")
+	}
+}
+
+// Tree Formation Process by aggregating QueryPath, CreateProxy, ConnectPath & joining cluster
+func (n *Node) formTree() {
+	// Starts a worker looping through all members to accumulate halfOpenPaths
+	ctx, stopWorker := context.WithCancel(context.Background())
+	go n.populateHalfOpenPathsWorker(ctx)
+
+	for len(n.paths) < TARGET_NUMBER_OF_CONNECTED_PATHS {
+		if halfOpenPath, err := n.getNextHalfOpenPath(); err == nil {
+			// if success, it will insert records in n.paths
+			n.ConnectPath(halfOpenPath.next, halfOpenPath.uuid)
+		}
+	}
+	stopWorker()
+}
+
+// Tree Formation Process with a particular target next hop, can fail.
+func (n *Node) formTreeWithTarget(targetAddr string, targetPathID uuid.UUID) error {
+	n.pathsRWLock.RLock()
+	defer n.pathsRWLock.RUnlock()
+	if _, pathIsConnected := n.paths[targetPathID]; pathIsConnected {
+		return errors.New("pathID is already connected")
+	}
+	resp, err := n.QueryPath(targetAddr)
+	if err != nil {
+		return err
+	}
+	for _, path := range resp.Paths {
+		respPathID, err := DecryptUUID(path.EncryptedTreeUUID, n.privateKey)
+		if err == nil && respPathID == targetPathID {
+			_, err = n.ConnectPath(targetAddr, targetPathID)
+			return err
+		}
+	}
+	return errors.New("pathID does not exists in the targetAddr node")
+}
+
+// TODO(@SauDoge): return the publishJobId should be enough, such that other function can simply check the map
+func (n *Node) Publish(key is.Key, message []byte) (uuid.UUID, error) {
+	// 1) Check tree formation status
+	// a) the node has connected to at least one path
+	// b) has at least k cover nodes
+
+	// In Case Move up() when trying to send a message
+	n.coversRWLock.Lock()
+	n.pathsRWLock.Lock()
+	if len(n.covers) < 10 || len(n.paths) < 1 {
+		defer n.coversRWLock.Unlock()
+		defer n.pathsRWLock.Unlock()
+		return uuid.Nil, errors.New("publishing condition not met")
+	}
+	n.coversRWLock.Unlock()
+	// 2) Validate the key
+	isValdiated := is.ValidateKey(key, message)
+	if !isValdiated {
+		return uuid.Nil, errors.New("key not valid")
+	}
+	// 3) Pick a path
+	pathID, randomPathProfile := pick(n.paths, n.pathsRWLock)
+	conn := *n.openConnections[pathID]
+
+	n.pathsRWLock.Unlock()
+
+	// 4) encrypt the data message to application message
+	dataMessage := DataMessage{Key: key, Content: message}
+	am, err := NewRealMessage(dataMessage, randomPathProfile.proxyPublic, randomPathProfile.symKey)
+	if err != nil {
+		return uuid.Nil, errors.New("encryption from data to application failed")
+	}
+
+	// 5) send the application message to the next hop
+	// TODO: mentions re-use conn but dont know where, need to find out
+	err = gob.NewEncoder(conn).Encode(am)
+	if err != nil {
+		return uuid.Nil, errors.New("error when sending tcp request")
+	}
+
+	// 6) update the publishingJob map
+	n.publishJobsRWLock.Lock()
+	newJobID := uuid.New()
+	n.publishJobs[newJobID] = PublishJobProfile{Key: key[:], Status: PENDING, OnPath: randomPathProfile.uuid}
+	n.publishJobsRWLock.Unlock()
+
+	// 7) initiate checkPublishJobStatusWorker()
+	go n.checkPublishJobStatusWorker(newJobID)
+
+	// 8) return the publishJobID
+	return newJobID, nil
 }
 
 func (n *Node) Read(key string) ([]byte, error) {
@@ -367,11 +662,6 @@ func (n *Node) GetPaths() []PathProfile {
 		result = append(result, val)
 	}
 	return result
-}
-
-func (n *Node) VerifyCover(coverIP string) bool {
-	_, ok := n.covers[coverIP]
-	return ok
 }
 
 // TODO(@SauDoge)
@@ -400,50 +690,45 @@ func (n *Node) DeleteCover(coverIP string) {
 }
 
 // TODO(@SauDoge)
-func (n *Node) Forward(message []byte, path PathProfile) error {
-	// 1) sym decrypt and check the first byte
-	// 	1.1) if byte = 0: cover message and send to next path
-	//  1.2) if byte = 1: asym decrypt and check correctness of checksum
-	//		1.2.1) if correct: publish and return nil
-	// 		1.2.2) if wrong: forward to the next path
+func (n *Node) Forward(asymOutput []byte, coverIP string) error {
 
-	asymmetricEncryptedContent, isReal, err := symmetricDecrypt(message, path.symKey)
+	correctTree := n.covers[coverIP].treeUUID
+	correctSymKey := n.paths[correctTree].symKey
+	nextHop := n.paths[correctTree].next
+
+	// 1) symmetric encryption
+	symInput := SymmetricEncryptDataMessage{
+		Type:                      Real,
+		AsymetricEncryptedPayload: asymOutput,
+	}
+
+	symInputInBytes, err := symInput.ToBytes()
 	if err != nil {
 		return err
 	}
-	if isReal {
-		// asym decryption
-		paddedContent, err := asymmetricDecrypt(asymmetricEncryptedContent, &n.privateKey)
-		if err != nil {
-			return err
-		}
-		if paddedContent != nil {
-			// remove salt from paddedContent and publish
-			return n.Publish("placeholder", asymmetricEncryptedContent)
-		} else {
-			// send the asymmetricEncryptedContent to the next path
-			var encryptedMsg []byte
-			if isReal {
-				encryptedMsg, _, _ = symmetricEncrypt(asymmetricEncryptedContent, n.covers[path.next].secretKey, [1]byte{1})
-			} else {
-				encryptedMsg, _, _ = symmetricEncrypt(asymmetricEncryptedContent, n.covers[path.next].secretKey, [1]byte{0})
-			}
-			dest := n.peers[path.next].conn
-			gob.NewEncoder(dest).Encode(encryptedMsg)
 
-		}
-	} else {
-		// cover message and send to next path
-		// find the conn of the next in path
-		var encryptedMsg []byte
-		if isReal {
-			encryptedMsg, _, _ = symmetricEncrypt(asymmetricEncryptedContent, n.covers[path.next].secretKey, [1]byte{1})
-		} else {
-			encryptedMsg, _, _ = symmetricEncrypt(asymmetricEncryptedContent, n.covers[path.next].secretKey, [1]byte{0})
-		}
-		dest := n.peers[path.next].conn
-		gob.NewEncoder(dest).Encode(encryptedMsg)
+	symOutput, err := SymmetricEncrypt(symInputInBytes, correctSymKey)
+	if err != nil {
+		return err
 	}
+
+	am := ApplicationMessage{
+		SymmetricEncryptedPayload: symOutput,
+	}
+
+	// 2) send to the next hop
+	// we can identify the correct next hop by the uuid of the tree
+	conn, err := net.Dial("tcp", nextHop)
+	if err != nil {
+		return errors.New("error when dial tcp addr")
+	}
+	defer conn.Close()
+
+	err = gob.NewEncoder(conn).Encode(am)
+	if err != nil {
+		return errors.New("error when sending tcp request")
+	}
+
 	return nil
 }
 
@@ -452,241 +737,250 @@ func (n *Node) Forward(message []byte, path PathProfile) error {
 // ****************
 
 func (n *Node) handleQueryPathReq(conn net.Conn, content *QueryPathReq) error {
-	// TODO: receive a public key and store somewhere
-
 	// send response with QueryPathResp
-	// how do Node know which conn to send to?x
-	// there should be someway to maintain the conn
-
-	queryPathResponse := ControlMessage{
-		ControlType: "queryPathResponse",
+	queryPathResp := QueryPathResp{
+		NodePublicKey: n.publicKey,
+		Paths:         []Path{},
 	}
-	if len(n.paths) != 0 {
-		var respPaths []Path
-		for _, v := range n.paths {
-			respPaths = append(respPaths, Path{
-				TreeUUID:       v.uuid,
-				NextHop:        v.next,
-				NextNextHop:    v.next2,
-				ProxyPublicKey: v.proxyPublic,
+	requesterPublicKey := content.PublicKey
+	if len(n.paths) > 0 {
+		for _, path := range n.paths {
+			encryptedPathID, err := EncryptUUID(path.uuid, requesterPublicKey)
+			if err != nil {
+				logProtocolMessageHandlerError("handleQueryPathReq", conn, err, content)
+				continue
+			}
+			queryPathResp.Paths = append(queryPathResp.Paths, Path{
+				EncryptedTreeUUID: encryptedPathID,
+				NextHop:           path.next,
+				NextNextHop:       path.next2,
+				ProxyPublicKey:    path.proxyPublic,
 			})
 		}
-		queryPathResponse.ControlContent = QueryPathResp{
-			NodePublicKey: n.publicKey,
-			Paths:         respPaths,
-		}
-	} else {
-		queryPathResponse.ControlContent = QueryPathResp{
-			NodePublicKey: n.publicKey,
-			Paths:         []Path{},
-		}
 	}
-	gob.Register(new(Path))
-	gob.Register(new(QueryPathResp))
+	protocolMessage := ProtocolMessage{
+		Type:    QueryPathResponse,
+		Content: queryPathResp,
+	}
 	enc := gob.NewEncoder(conn)
-	err := enc.Encode(queryPathResponse)
+	err := enc.Encode(protocolMessage)
 	if err != nil {
-		log.Fatalf("something is wrong when sending encoded: %s \n", err)
+		logProtocolMessageHandlerError("handleQueryPathReq", conn, err, content)
 	}
-
-	return nil
-}
-
-func (n *Node) handleQueryPathResp(conn net.Conn, content *QueryPathResp) error {
-
-	// If []paths is empty
-	if len(content.Paths) == 0 {
-		n.RequestProxy(conn, n.keyExchange)
-		return nil
-	}
-
-	// TODO(@SauDoge) Handling route loop problems
-	for k, v := range content.Paths {
-		// if repeated
-		if _, ok := n.paths[v.TreeUUID]; ok {
-			if k == len(content.Paths) {
-				return errors.New("tree UUID duplication")
-			}
-			continue
-		} else {
-			n.halfOpenPath = PathProfile{
-				uuid:        v.TreeUUID,
-				next:        conn.RemoteAddr().String(),
-				next2:       v.NextHop,
-				proxyPublic: v.ProxyPublicKey,
-			}
-			break
-		}
-	}
-
-	log.Printf("next hop: %s \n", net.ParseIP((conn.RemoteAddr().String())))
-
-	// verify cover
-	nextConn := n.ConnectTo(n.halfOpenPath.next)
-	verifyCoverRequest := ControlMessage{
-		ControlType: "verifyCoverRequest",
-		ControlContent: VerifyCoverReq{
-			NextHop: n.halfOpenPath.next,
-		},
-	}
-	gob.Register(new(VerifyCoverReq))
-	err := gob.NewEncoder(nextConn).Encode(verifyCoverRequest)
-	if err != nil {
-		log.Fatalf("something is wrong when sending encoded: %s \n", err)
-	}
-	return nil
+	return err
 }
 
 func (n *Node) handleVerifyCoverReq(conn net.Conn, content *VerifyCoverReq) error {
+	coverToBeVerified := content.NextHop
+	_, isVerified := n.covers[coverToBeVerified]
 
-	var verifyCoverResponse ControlMessage
-	if n.t.listener.Addr().String() == string(content.NextHop) {
-		verifyCoverResponse = ControlMessage{
-			ControlType: "verifyCoverResponse",
-			ControlContent: VerifyCoverResp{
-				IsVerified: true,
-			},
-		}
-	} else {
-		verifyCoverResponse = ControlMessage{
-			ControlType: "verifyCoverResponse",
-			ControlContent: VerifyCoverResp{
-				IsVerified: false,
-			},
-		}
+	verifyCoverResp := VerifyCoverResp{
+		IsVerified: isVerified,
 	}
 
-	gob.Register(new(VerifyCoverResp))
-	err := gob.NewEncoder(conn).Encode(verifyCoverResponse)
+	err := gob.NewEncoder(conn).Encode(verifyCoverResp)
 	if err != nil {
-		log.Fatalf("something is wrong when sending encoded: %s \n", err)
+		logProtocolMessageHandlerError("handleVerifyCoverReq", conn, err, content)
 	}
-	return nil
-}
-
-func (n *Node) handleVerifyCoverResp(conn net.Conn, content *VerifyCoverResp) error {
-
-	if !content.IsVerified {
-		// half open path is already stored
-		n.isVerified <- true
-		return nil
-
-	} else {
-		// TODO(@SauDoge): if verification failed, repeat the calling process
-		n.isVerified <- false
-		n.halfOpenPath = PathProfile{}
-		return nil
-	}
+	return err
 }
 
 func (n *Node) handleConnectPathReq(conn net.Conn, content *ConnectPathReq) error {
+	// check number of cover nodes
+	n.coversRWLock.RLock()
+	defer n.coversRWLock.RUnlock()
+	shouldAcceptConnection := len(n.covers) < MAXIMUM_NUMBER_OF_COVER_NODES
 
-	// send resp
-	respKeX := content.ReqKeyExchange.GenerateReturn(n.publicKey)
+	var connectPathResponse ProtocolMessage
 
-	connectPathResponse := ControlMessage{
-		ControlType: "connectPathResponse",
-		ControlContent: ConnectPathResp{
-			Status:          true,
-			RespKeyExchange: respKeX,
-		},
-	}
+	if shouldAcceptConnection {
+		requestedPath, err := DecryptUUID(content.EncryptedTreeUUID, n.privateKey)
+		if err != nil {
+			logProtocolMessageHandlerError("handleConnectPathReq", conn, err, content)
+			return err
+		}
+		requesterKeyExchangeInfo := content.KeyExchange
 
-	gob.Register(new(ConnectPathResp))
-	gob.Register(new(DHKeyExchange))
-	gob.NewEncoder(conn).Encode(connectPathResponse)
+		lenInByte := 32
+		myKeyExchangeSecret := RandomBigInt(lenInByte)
+		myKeyExchangeInfo := requesterKeyExchangeInfo.GenerateReturn(*myKeyExchangeSecret)
 
-	// create secret key
-	secretKey := content.ReqKeyExchange.GetSymKey(n.publicKey)
-	log.Printf("Here is the secret key: %d \n", secretKey.Int64())
+		// Generate Secret Symmetric Key for this connection
+		secretKey := requesterKeyExchangeInfo.GetSymKey(*myKeyExchangeSecret)
 
-	// add incoming node as a cover node
-	n.covers[conn.RemoteAddr().String()] = CoverNodeProfile{
-		cover:     conn.RemoteAddr().String(),
-		secretKey: secretKey,
-		treeUUID:  content.TreeUUID,
-	}
+		// add incoming node as a cover node
+		n.covers[conn.RemoteAddr().String()] = CoverNodeProfile{
+			cover:     conn.RemoteAddr().String(),
+			secretKey: secretKey,
+			treeUUID:  requestedPath,
+		}
 
-	return nil
-}
-
-func (n *Node) handleConnectPathResp(conn net.Conn, content *ConnectPathResp) error {
-
-	if content.Status {
-		secretKey := content.RespKeyExchange.GetSymKey(n.publicKey)
-		// TODO(@SauDoge): write new path into own paths
-		n.halfOpenPath.symKey = secretKey
-		n.paths[n.halfOpenPath.uuid] = n.halfOpenPath
-		n.halfOpenPath = PathProfile{}
-		n.isConnected <- true
+		connectPathResponse = ProtocolMessage{
+			Type: ConnectPathResponse,
+			Content: ConnectPathResp{
+				Status:      true,
+				KeyExchange: myKeyExchangeInfo,
+			},
+		}
 	} else {
-		// TODO(@SauDoge): error handling if not accepted
-		n.isConnected <- false
+		connectPathResponse = ProtocolMessage{
+			Type: ConnectPathResponse,
+			Content: ConnectPathResp{
+				Status:      false,
+				KeyExchange: DHKeyExchange{},
+			},
+		}
 	}
-
-	// TODO(@SauDoge) trigger a routine to send cover message repeatedly
-	return nil
+	err := gob.NewEncoder(conn).Encode(connectPathResponse)
+	if err != nil {
+		logProtocolMessageHandlerError("handleConnectPathReq", conn, err, content)
+		return err
+	}
+	// If everything works, start a worker handling all incoming Application Messages(Real and Cover) from this cover node.
+	go n.handleApplicationMessageWorker(conn, APPLICATION_MESSAGE_RECEIVING_INTERVAL)
+	return err
 }
 
-// TODO(@SauDoge) 1) access IS 2) change to real from pseudo IPFS IP
 func (n *Node) handleCreateProxyReq(conn net.Conn, content *CreateProxyReq) error {
-	// TODO(@SauDoge) 1) access IS
+	// check number of cover nodes
+	n.coversRWLock.RLock()
+	defer n.coversRWLock.RUnlock()
+	shouldAcceptConnection := len(n.covers) < MAXIMUM_NUMBER_OF_COVER_NODES
 
-	// new path as self becomes the starting point of a new path
-	newID, _ := uuid.NewUUID()
-	n.paths[newID] = PathProfile{
-		uuid:        newID,
-		next:        "127.0.0.1:3001", // TODO(@SauDoge) change to real from pseudo IPFS IP
-		next2:       "127.0.0.1:3001",
-		symKey:      content.ReqKeyExchange.GetSymKey(n.publicKey),
-		proxyPublic: n.publicKey,
+	var createProxyResponse ProtocolMessage
+
+	if shouldAcceptConnection {
+
+		lenInByte := 32
+		myKeyExchangeSecret := RandomBigInt(lenInByte)
+		myKeyExchangeInfo := content.KeyExchange.GenerateReturn(*myKeyExchangeSecret)
+		secretKey := content.KeyExchange.GetSymKey(*myKeyExchangeSecret)
+		requesterPublicKey := content.PublicKey
+
+		// new path as self becomes the starting point of a new path
+		newPathID, _ := uuid.NewUUID()
+		n.paths[newPathID] = PathProfile{
+			uuid:        newPathID,
+			next:        "ImmutableStorage", // Use a value tag to reflect that the next hop is ImmutableStorage
+			next2:       "",                 // There is no next-next hop
+			symKey:      secretKey,
+			proxyPublic: n.publicKey,
+		}
+
+		// new cover node
+		n.covers[conn.RemoteAddr().String()] = CoverNodeProfile{
+			cover:     conn.RemoteAddr().String(),
+			secretKey: secretKey,
+			treeUUID:  newPathID,
+		}
+
+		// send a create proxy response back
+		encryptedPathID, err := EncryptUUID(newPathID, requesterPublicKey)
+		if err != nil {
+			logProtocolMessageHandlerError("handleCreateProxyReq", conn, err, content)
+			return err
+		}
+
+		createProxyResponse = ProtocolMessage{
+			Type: CreateProxyRequest,
+			Content: CreateProxyResp{
+				Status:            true,
+				KeyExchange:       myKeyExchangeInfo,
+				Public:            n.publicKey,
+				EncryptedTreeUUID: encryptedPathID,
+			},
+		}
+	} else {
+		createProxyResponse = ProtocolMessage{
+			Type: CreateProxyRequest,
+			Content: CreateProxyResp{
+				Status:            false,
+				KeyExchange:       DHKeyExchange{},
+				Public:            []byte{},
+				EncryptedTreeUUID: []byte{},
+			},
+		}
 	}
 
-	// new cover node
-	n.covers[conn.RemoteAddr().String()] = CoverNodeProfile{
-		cover:     conn.RemoteAddr().String(),
-		secretKey: n.paths[newID].symKey,
-		treeUUID:  newID,
+	err := gob.NewEncoder(conn).Encode(createProxyResponse)
+	if err != nil {
+		logProtocolMessageHandlerError("handleCreateProxyReq", conn, err, content)
 	}
+	return err
+}
 
-	// send a create proxy response back
-	createProxyResponse := ControlMessage{
-		ControlType: "createProxyResponse",
-		ControlContent: CreateProxyResp{
-			Status:          true,
-			RespKeyExchange: content.ReqKeyExchange.GenerateReturn(n.publicKey),
-			N1Public:        n.publicKey,
-			TreeUUID:        newID,
-		},
-	}
-
-	gob.Register(new(CreateProxyResp))
-	gob.NewEncoder(conn).Encode(createProxyResponse)
-
+func (n *Node) handleDeleteCoverReq(conn net.Conn, _ *DeleteCoverReq) error {
+	requesterIP := conn.RemoteAddr().String()
+	delete(n.covers, requesterIP)
 	return nil
 }
 
-// TODO(@SauDoge) change to real from pseudo IPFS IP,
-func (n *Node) handleCreateProxyResp(conn net.Conn, content *CreateProxyResp) error {
+// ****************
+// TODO: Handlers for Application Messages, ie. real and cover message
+// ****************
 
-	secretKey := content.RespKeyExchange.GetSymKey(n.publicKey)
-
-	n.paths[content.TreeUUID] = PathProfile{
-		uuid:        content.TreeUUID,
-		next:        conn.RemoteAddr().String(),
-		next2:       "127.0.0.1:3001", // TODO(@SauDoge) change to real from pseudo IPFS IP,
-		symKey:      secretKey,
-		proxyPublic: content.N1Public,
+func (n *Node) handleApplicationMessage(rawMessage ApplicationMessage, coverIp string) error {
+	// TODO:
+	// 1. Symmetric Decrypt.
+	symmetricKey := n.covers[coverIp].secretKey
+	symOutput := rawMessage.SymmetricEncryptedPayload
+	symInputBytes, err := SymmetricDecrypt(symOutput, symmetricKey)
+	if err != nil {
+		return err
 	}
-
-	n.isConnected <- true
-
-	return nil
+	// 2. Decode Symmetric Input Bytes
+	symInput := SymmetricEncryptDataMessage{}
+	if err := gob.NewDecoder(bytes.NewBuffer(symInputBytes)).Decode(&symInput); err != nil {
+		return err
+	}
+	// 3. Check Type
+	switch symInput.Type {
+	case Cover:
+		// simply discarded. The timeout is cancelled when this node received an ApplicationMessage, regardless of Cover or Real.
+		return nil
+	case Real:
+		return n.handleRealMessage(symInput.AsymetricEncryptedPayload)
+	default:
+		return errors.New("invalid data message type")
+	}
 }
 
-func (n *Node) handleDeleteCoverReq(conn net.Conn, content *DeleteCoverReq) error {
-	if content.Status {
-		delete(n.covers, conn.RemoteAddr().String())
+func (n *Node) handleRealMessage(asymOutput []byte) error {
+	priKey := n.privateKey
+	asymInputBytes, err := AsymmetricDecrypt(asymOutput, priKey)
+	if err != nil && !errors.Is(err, errWrongPrivateKey) {
+		// Failed to decrypt, unknown error
+		return err
+	}
+	// Check if self is the proxy
+	isProxy := err == nil
+	asymInput := AsymetricEncryptDataMessage{}
+	err = gob.NewDecoder(bytes.NewBuffer(asymInputBytes)).Decode(&asymInput)
+	if err != nil {
+		return err
+	}
+	if isProxy {
+		// Store in ImmutableStorage
+		key := asymInput.Data.Key
+		content := asymInput.Data.Content
+		resp, err := n.isClient.Store(key, content)
+		if err != nil {
+			return err
+		}
+		log.Printf("[Proxy.Store: Status = %v]:Key=%s", resp.Success, string(key[:]))
+	} else {
+		// Call Forward
+		n.pathsRWLock.Lock()
+		defer n.pathsRWLock.RUnlock()
+		randI := rand.Intn(len(n.paths))
+		i := 0
+		for _, path := range n.paths {
+			if i == randI {
+				return n.Forward(asymOutput, path.next)
+			}
+			i++
+		}
+		return errors.New("unknown error during Forward")
 	}
 	return nil
 }
@@ -694,40 +988,6 @@ func (n *Node) handleDeleteCoverReq(conn net.Conn, content *DeleteCoverReq) erro
 // ****************
 // Handlers for http communication
 // ****************
-// TODO(@SauDoge)
-func (n *Node) handleJoinCluster(w http.ResponseWriter, req *http.Request) {
-	// 1) If the node already in the cluster, return already in cluster
-	if n.paths != nil {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("Already joined a cluster"))
-	} else {
-		// 2) If the node not in the cluster specified, do tree formation with the cluster
-		err := json.NewDecoder(req.Body)
-		var targetIP []byte
-		if err != nil {
-			log.Fatalf("target IP not found: %s \n", targetIP)
-			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte("Cannot identify target IP"))
-		} else {
-			n.formTree(string(targetIP))
-		}
-	}
-
-}
-
-// TODO(@SauDoge)
-func (n *Node) handleLeaveCluster(w http.ResponseWriter, req *http.Request) {
-	// 1) If the node not in the cluster, return already left
-	if n.paths == nil {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("Already left a cluster"))
-	} else {
-		// 2) If the node is in the cluster, leave tree and update profile
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("Leave a cluster"))
-	}
-
-}
 
 // DONE(@SauDoge)
 func (n *Node) handleGetMessage(w http.ResponseWriter, req *http.Request) {
@@ -745,7 +1005,9 @@ func (n *Node) handleGetMessage(w http.ResponseWriter, req *http.Request) {
 			resp, err := n.isClient.Read([]byte(v))
 			if err != nil {
 				log.Fatalf("No such message exist: %s \n", err)
+				continue
 			}
+
 			if resp.Content != nil {
 				// 2) If message exists in IS, return to request
 				keyContentPair[v] = string(resp.Content)
@@ -767,24 +1029,23 @@ func (n *Node) handleGetMessage(w http.ResponseWriter, req *http.Request) {
 // TODO(@SauDoge): Forward Implementation locked
 func (n *Node) handlePostMessage(w http.ResponseWriter, req *http.Request) {
 	decoder := json.NewDecoder(req.Body)
-	var message Message
+	var message DataMessage
 	err := decoder.Decode(&message)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte("Request Body not formatted correctly \n"))
 	} else {
-		// 1) call Forward()
-		err := n.Forward(nil, PathProfile{})
+		// 1) call Publish()
+		publishJobID, err := n.Publish(message.Key, message.Content)
 
 		if err != nil {
 			// 3) If forward failed, return failed
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte("Posting failed on backend. Please try again. \n"))
 		} else {
-			// 2) If forward successful, return success
+			// 2) If forward successful, return success and the publishingJobID
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("Message posted successfully.\n"))
+			w.Write(publishJobID[:])
 		}
 	}
-
 }
