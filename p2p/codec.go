@@ -72,9 +72,6 @@ func AsymmetricDecrypt(input []byte, privInBytes []byte) ([]byte, error) {
 // Symmetric Encryption
 // ==========================================
 
-// the content of iv shouldn't matter too much and can be the same
-var iv []byte = []byte("my16bytesIV12345")
-
 // G, P, HalfKey are all safe to leak to middle man.
 // But mySecret must be kept to the node only and never exposed to anyone.
 type DHKeyExchange struct {

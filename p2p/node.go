@@ -18,9 +18,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// Global Variables
-var httpWg sync.WaitGroup // TODO(@SauDoge): Find the correct place to terminate this wg
-
 type Node struct {
 	// Info members
 	paths           map[uuid.UUID]PathProfile
@@ -43,30 +40,26 @@ type Node struct {
 	// ConnectPath Scheduler
 	pendingHalfOpenPaths chan uuid.UUID
 
-	// Subgoroutine cancellable context
-	ctrlCSignalPropagator context.Context
-
 	// grpc member
 	ndClient NodeDiscoveryClient
 	isClient ImmutableStorageClient
 }
 
 func MakeServerAndStart() {
-	// TODO: create a proper context for listening to Ctrl C signals
-	// 2nd returned value is a function, call it when received a SIGINT signal (Ctrl C)
-	ctrlCSignalPropagator, _ := context.WithCancel(context.Background())
-	s := New(ctrlCSignalPropagator)
+	s := New()
+
 	go s.StartTCP()
 
 	// A blocking function, return after connected to 3 paths
 	s.formTree()
 
 	go s.StartHTTP()
+	go s.checkMoveUpReqWorker()
 }
 
 // New() creates a new node
 // This should only be called once for every core
-func New(ctrlCSignalPropagator context.Context) *Node {
+func New() *Node {
 
 	// Generate Asymmetric Key Pair
 	public, private, err := GenerateAsymmetricKeyPair()
@@ -98,8 +91,6 @@ func New(ctrlCSignalPropagator context.Context) *Node {
 
 		pendingHalfOpenPaths: make(chan uuid.UUID, 512),
 
-		ctrlCSignalPropagator: ctrlCSignalPropagator,
-
 		ndClient: *nd,
 		isClient: *is,
 	}
@@ -119,8 +110,6 @@ func (n *Node) StartHTTP() {
 	hs.mux.HandleFunc("/PostMessage", n.handlePostMessage)
 
 	go hs.StartServer()
-
-	defer httpWg.Done()
 }
 
 // StartTCP() starts the internode communicating TCP
@@ -197,7 +186,6 @@ func (n *Node) handleMessage(conn net.Conn, msg ProtocolMessage) error {
 // A setup function for gob package to pre-register all encoding types before any sending tcp requests
 // TODO: Update the types and check if any missing types.
 func initGobTypeRegistration() {
-
 	gob.Register(&QueryPathReq{})
 	gob.Register(&DHKeyExchange{})
 	gob.Register(&ConnectPathReq{})
@@ -210,6 +198,8 @@ func initGobTypeRegistration() {
 	gob.Register(&ConnectPathResp{})
 	gob.Register(&DHKeyExchange{})
 	gob.Register(&CreateProxyResp{})
+	gob.Register(&ProtocolMessage{})
+	gob.Register(&ApplicationMessage{})
 }
 
 // A generic function used to send tcp requests and wait for response with a timeout.

@@ -12,12 +12,6 @@ import (
 )
 
 // This handles connections with ND and IS
-
-const (
-	NDAddr = ":3200"
-	ISAddr = ":3100"
-)
-
 type NodeDiscoveryClient struct {
 	client ndProtos.NodeDiscoveryClient
 	// members []string
@@ -28,7 +22,7 @@ type ImmutableStorageClient struct {
 }
 
 func (nc *NodeDiscoveryClient) New() {
-	conn, err := grpc.Dial(NDAddr)
+	conn, err := grpc.Dial(NODE_DISCOVERY_SERVER_LISTEN_PORT, grpc.WithInsecure())
 	if err != nil {
 		log.Fatalf("Cannot connect to Node Discovery: %s \n", err)
 	}
@@ -55,7 +49,7 @@ func (nc *NodeDiscoveryClient) GetMembers() (*ndProtos.GetMembersReponse, error)
 }
 
 func (ic *ImmutableStorageClient) New() {
-	conn, err := grpc.Dial(ISAddr)
+	conn, err := grpc.Dial(IMMUTABLE_STORAGE_SERVER_LISTEN_PORT, grpc.WithInsecure())
 	if err != nil {
 		log.Fatalf("Cannot connect to Immutable Storage: %s \n", err)
 	}

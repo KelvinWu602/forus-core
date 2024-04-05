@@ -1,6 +1,6 @@
 # main.go
 
-## func main() 
+## func main() - Found unnecessary, as Forus-core does not hold persistent data, it is ok to immediately stop the main goroutine, without waiting for all subgoroutines to exit.
 
 - replace empty select statement with a SIGINT catcher (@KelvinWu602)
     - edit MakeServerAndStart as well

@@ -99,8 +99,7 @@ func (node *Node) checkPublishJobStatusWorker(jobID uuid.UUID) {
 	node.markPublishJobStatus(jobID, publishJobProfile)
 }
 
-func (n *Node) checkMoveUpReqWorker(failureThreshold int, checkInterval time.Duration) {
-
+func (n *Node) checkMoveUpReqWorker() {
 	checkDone := make(chan bool)
 	defer close(checkDone)
 
@@ -114,7 +113,7 @@ func (n *Node) checkMoveUpReqWorker(failureThreshold int, checkInterval time.Dur
 			for k, v := range n.paths {
 				v.pathStat.CountLock.Lock()
 				failureCount := v.pathStat.ReadFailureCount()
-				if failureCount < failureThreshold {
+				if failureCount < MOVE_UP_REQUIREMENT_FAILURE_THRESHOLD {
 					continue
 				} else {
 					go n.MoveUpVoluntarily(k)
@@ -157,14 +156,9 @@ func (n *Node) checkMoveUpReqWorker(failureThreshold int, checkInterval time.Dur
 			checkDone <- true
 		}()
 
-		select {
-		case <-checkDone:
-			time.Sleep(checkInterval)
-		case <-n.ctrlCSignalPropagator.Done():
-			return
-		}
+		<-checkDone
+		time.Sleep(MOVE_UP_REQUIREMENT_CHECKING_INTERVAL)
 	}
-
 }
 
 func (node *Node) sendCoverMessageWorker(conn net.Conn, interval time.Duration, pathID uuid.UUID) {
@@ -198,10 +192,6 @@ func (node *Node) sendCoverMessageWorker(conn net.Conn, interval time.Duration, 
 		case err := <-doneErr:
 			log.Printf("[Error]:sendCoverMessageWorker when sending cover message to %s: %v\n", conn.RemoteAddr().String(), err)
 			node.removePathProfile(pathID)
-			return
-		case <-node.ctrlCSignalPropagator.Done():
-			node.removePathProfile(pathID)
-			log.Printf("sendCoverMessageWorker to %s is stopped successfully.\n", conn.RemoteAddr().String())
 			return
 		case <-doneSuccess:
 			time.Sleep(interval)
@@ -244,9 +234,6 @@ func (node *Node) handleApplicationMessageWorker(conn net.Conn, maxInterval time
 		case <-time.After(maxInterval):
 			log.Printf("handleApplicationMessageWorker from %s: COVER MESSAGE TIMEOUT.\n", conn.RemoteAddr().String())
 			node.removeCoversProfile(coverIp)
-			return
-		case <-node.ctrlCSignalPropagator.Done():
-			log.Printf("handleApplicationMessageWorker from %s: CANCEL SIGNAL RECEIVED.\n", conn.RemoteAddr().String())
 			return
 		}
 	}
