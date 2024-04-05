@@ -93,8 +93,8 @@ func (n *Node) StartHTTP() {
 	logMsg("StartHTTP", "setting up HTTP server at localhost"+HTTP_SERVER_LISTEN_PORT)
 	hs := NewHTTPTransport(HTTP_SERVER_LISTEN_PORT)
 
-	hs.mux.HandleFunc("/GetMessage", n.handleGetMessage)
-	hs.mux.HandleFunc("/PostMessage", n.handlePostMessage)
+	hs.mux.HandleFunc("/message", n.handlerMessage)
+	hs.mux.HandleFunc("/publish-job", n.handleGetPublishJobStatus)
 
 	go hs.StartServer()
 	logMsg("StartHTTP", "HTTP server running")
@@ -859,6 +859,20 @@ func (n *Node) handleRealMessage(asymOutput []byte) error {
 // ****************
 
 // DONE(@SauDoge)
+
+func (n *Node) handlerMessage(w http.ResponseWriter, req *http.Request) {
+	switch req.Method {
+	case http.MethodGet:
+		n.handleGetMessage(w, req)
+		return
+	case http.MethodPost:
+		n.handlePostMessage(w, req)
+		return
+	}
+	w.WriteHeader(http.StatusMethodNotAllowed)
+	w.Write([]byte("only accept GET and POST"))
+}
+
 func (n *Node) handleGetMessage(w http.ResponseWriter, req *http.Request) {
 	// 0) If the queryString is in the wrong format, REJECT
 	query := req.URL.Query()
@@ -916,4 +930,37 @@ func (n *Node) handlePostMessage(w http.ResponseWriter, req *http.Request) {
 			w.Write(publishJobID[:])
 		}
 	}
+}
+
+func (n *Node) handleGetPublishJobStatus(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		w.Write([]byte("Only allow GET request"))
+		return
+	}
+	// 0) If the queryString is in the wrong format, REJECT
+	query := req.URL.Query()
+	id := query.Get("id")
+	if id == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("The id is empty"))
+		return
+	}
+	jobId, err := uuid.Parse(id)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("The id is not a valid uuid"))
+		return
+	}
+	publishJob, found := n.publishJobs.getValue(jobId)
+	if !found {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte("The requested publishJob is not found"))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	// return a json that state which
+	json.NewEncoder(w).Encode(publishJob)
+	return
 }
