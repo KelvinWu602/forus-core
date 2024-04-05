@@ -282,31 +282,3 @@ func (node *Node) handleApplicationMessageWorker(conn net.Conn, maxInterval time
 		}
 	}
 }
-
-// Iterate all cluster members infinitely many times, and perform query path on all of them. Cancellable.
-func (node *Node) populateHalfOpenPathsWorker(ctx context.Context) {
-	for {
-		// 1 iteration of looping through all cluster members
-		resp, err := node.ndClient.GetMembers()
-		if err != nil {
-			log.Printf("[populateHalfOpenPathsWorker]:Error:%v\n", err)
-			return
-		}
-		done := make(chan bool)
-		for _, memberIP := range resp.Member {
-			// looping through all cluster members
-			addr := memberIP + TCP_SERVER_LISTEN_PORT
-			go func() {
-				// call QueryPath, which will append to the halfOpenPaths, will block when pendingHalfOpenPath is full.
-				node.QueryPath(addr)
-				done <- true
-			}()
-			select {
-			case <-done:
-				continue
-			case <-ctx.Done():
-				return
-			}
-		}
-	}
-}

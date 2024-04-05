@@ -2,7 +2,6 @@ package p2p
 
 import (
 	"bytes"
-	"context"
 	"encoding/gob"
 	"encoding/json"
 	"errors"
@@ -310,7 +309,8 @@ func (n *Node) sendCreateProxyRequest(addr string, n3X DHKeyExchange) (*CreatePr
 // ACTION is considered atomic and can self-rollback in case of failure.
 // Only ACTION functions can directly call sendXXXRequest functions. All other functions suppose to call ACTION functions only.
 
-func (n *Node) QueryPath(addr string) (*QueryPathResp, error) {
+func (n *Node) QueryPath(addr string) (*QueryPathResp, []PathProfile, error) {
+	verifiedPaths := []PathProfile{}
 	resp, err := n.sendQueryPathRequest(addr)
 	if err == nil {
 		// Cache the public key
@@ -333,12 +333,11 @@ func (n *Node) QueryPath(addr string) (*QueryPathResp, error) {
 			// Ask my next-next hop to verify if my next-hop is one of its cover nodes
 			verifyCoverResp, err := n.sendVerifyCoverRequest(halfOpenPath.next2, halfOpenPath.next)
 			if err == nil && verifyCoverResp.IsVerified {
-				n.halfOpenPath.setValue(pathID, halfOpenPath)
-				n.pendingHalfOpenPaths <- halfOpenPath.uuid
+				verifiedPaths = append(verifiedPaths, halfOpenPath)
 			}
 		}
 	}
-	return resp, err
+	return resp, verifiedPaths, err
 }
 
 func (n *Node) ConnectPath(addr string, treeID uuid.UUID) (*ConnectPathResp, error) {
@@ -482,17 +481,40 @@ func (n *Node) getNextHalfOpenPath() (*PathProfile, error) {
 
 // Tree Formation Process by aggregating QueryPath, CreateProxy, ConnectPath & joining cluster
 func (n *Node) fulfillPublishCondition() {
-	// Starts a worker looping through all members to accumulate halfOpenPaths
-	ctx, stopWorker := context.WithCancel(context.Background())
-	go n.populateHalfOpenPathsWorker(ctx)
+	// Get all cluster members IP
+	resp, err := n.ndClient.GetMembers()
+	if err != nil {
+		log.Printf("[fulfillPublishCondition]:Error:%v\n", err)
+		return
+	}
+	clusterSize := len(resp.Member)
+	done := make(chan bool)
+
+	timeout := time.After(FULFILL_PUBLISH_CONDITION_TIMEOUT)
 
 	for n.paths.getSize() < TARGET_NUMBER_OF_CONNECTED_PATHS {
-		if halfOpenPath, err := n.getNextHalfOpenPath(); err == nil {
-			// if success, it will insert records in n.paths
-			n.ConnectPath(halfOpenPath.next, halfOpenPath.uuid)
+		go func() {
+			peerChoice := rand.Intn(clusterSize)
+			addr := resp.Member[peerChoice] + TCP_SERVER_LISTEN_PORT
+			_, pendingPaths, _ := n.QueryPath(addr)
+			if len(pendingPaths) > 0 {
+				// if the peer offers some path, connect to it
+				// will not connect to all path under the same node to diverse risk
+				pathChoice := rand.Intn(len(pendingPaths))
+				n.ConnectPath(addr, pendingPaths[pathChoice].uuid)
+			} else {
+				// if the peer does not have path, ask it to become a proxy
+				n.CreateProxy(addr)
+			}
+			done <- true
+		}()
+		select {
+		case <-done:
+			continue
+		case <-timeout:
+			return
 		}
 	}
-	stopWorker()
 }
 
 // return the publishJobId, such that user can check if the message has been successfully published
