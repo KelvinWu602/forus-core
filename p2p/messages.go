@@ -121,9 +121,6 @@ type CreateProxyResp struct {
 	EncryptedTreeUUID []byte
 }
 
-type DeleteCoverReq struct {
-}
-
 func CastProtocolMessage[output any](raw any, targetType ProtocolMessageType) (*output, error) {
 	if output, castSuccess := raw.(output); castSuccess {
 		return &output, nil

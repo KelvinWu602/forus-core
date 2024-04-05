@@ -6,12 +6,12 @@ import (
 	"encoding/gob"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"math/big"
 	"math/rand"
 	"net"
 	"net/http"
-	"sync"
 	"time"
 
 	is "github.com/KelvinWu602/immutable-storage/blueprint"
@@ -20,107 +20,95 @@ import (
 
 type Node struct {
 	// Info members
-	paths           map[uuid.UUID]PathProfile
-	openConnections map[uuid.UUID]*net.Conn
-	halfOpenPath    map[uuid.UUID]PathProfile
-	covers          map[string]CoverNodeProfile
-	publishJobs     map[uuid.UUID]PublishJobProfile
-	peerPublicKeys  map[string][]byte
+	paths           *MutexMap[uuid.UUID, PathProfile]
+	openConnections *MutexMap[uuid.UUID, net.Conn]
+	halfOpenPath    *MutexMap[uuid.UUID, PathProfile]
+	covers          *MutexMap[string, CoverNodeProfile]
+	publishJobs     *MutexMap[uuid.UUID, PublishJobProfile]
+	peerPublicKeys  *MutexMap[string, []byte]
 	publicKey       []byte
 	privateKey      []byte
-
-	// Synchronization
-	pathsRWLock           *sync.RWMutex // should acquire a Read lock whenever reading paths content
-	openConnectionsRWLock *sync.RWMutex // should acquire a Read lock whenever reading openConnections content
-	halfOpenPathsRWLock   *sync.RWMutex // should acquire a Read lock whenever reading halfOpenPaths content
-	publishJobsRWLock     *sync.RWMutex // should acquire a Read lock whenever reading publishJobs content
-	coversRWLock          *sync.RWMutex // should acquire a Read lock whenever reading covers content
-	peerPublicKeysRWLock  *sync.RWMutex // should acquire a Read lock whenever reading peerPublicKeys content
 
 	// ConnectPath Scheduler
 	pendingHalfOpenPaths chan uuid.UUID
 
 	// grpc member
-	ndClient NodeDiscoveryClient
-	isClient ImmutableStorageClient
+	ndClient *NodeDiscoveryClient
+	isClient *ImmutableStorageClient
 }
 
-func MakeServerAndStart() {
-	s := New()
+func StartNode() {
+	initGobTypeRegistration()
+	node := NewNode()
+	node.initDependencies()
 
-	go s.StartTCP()
+	go node.StartTCP()
+	go node.StartHTTP()
 
-	// A blocking function, return after connected to 3 paths
-	s.formTree()
-
-	go s.StartHTTP()
-	go s.checkMoveUpReqWorker()
+	go node.checkPublishConditionWorker()
+	go node.maintainPathsHealthWorker()
 }
 
 // New() creates a new node
 // This should only be called once for every core
-func New() *Node {
-
+func NewNode() *Node {
 	// Generate Asymmetric Key Pair
 	public, private, err := GenerateAsymmetricKeyPair()
 	if err != nil {
 		log.Printf("Can't generate asymmetric Key Pairs")
 	}
 
-	nd := initNodeDiscoverClient()
-	is := initImmutableStorageClient()
-	// Tree Formation is delayed until the start of TCP server first to receive CM resp
-
 	self := &Node{
 		publicKey:  public,
 		privateKey: private,
 
-		paths:           make(map[uuid.UUID]PathProfile),
-		openConnections: make(map[uuid.UUID]*net.Conn),
-		halfOpenPath:    make(map[uuid.UUID]PathProfile),
-		covers:          make(map[string]CoverNodeProfile),
-		publishJobs:     make(map[uuid.UUID]PublishJobProfile),
-		peerPublicKeys:  make(map[string][]byte),
-
-		pathsRWLock:           &sync.RWMutex{},
-		openConnectionsRWLock: &sync.RWMutex{},
-		halfOpenPathsRWLock:   &sync.RWMutex{},
-		publishJobsRWLock:     &sync.RWMutex{},
-		coversRWLock:          &sync.RWMutex{},
-		peerPublicKeysRWLock:  &sync.RWMutex{},
+		paths:           NewMutexMap[uuid.UUID, PathProfile](),
+		openConnections: NewMutexMap[uuid.UUID, net.Conn](),
+		halfOpenPath:    NewMutexMap[uuid.UUID, PathProfile](),
+		covers:          NewMutexMap[string, CoverNodeProfile](),
+		publishJobs:     NewMutexMap[uuid.UUID, PublishJobProfile](),
+		peerPublicKeys:  NewMutexMap[string, []byte](),
 
 		pendingHalfOpenPaths: make(chan uuid.UUID, 512),
 
-		ndClient: *nd,
-		isClient: *is,
+		ndClient: nil,
+		isClient: nil,
 	}
-
-	initGobTypeRegistration()
-
 	return self
+}
+
+// initDependencies creates connections with the dependencies of Forus-Core, including
+// 1) NodeDiscovery grpc server:  localhost:3200
+// 2) ImmutableStorage grpc server  :  localhost:3100
+//
+// This is a blocking procedure and it will retry infinitely on error
+func (n *Node) initDependencies() {
+	logMsg("initDependencies", "setting up dependencies...")
+	n.ndClient = initNodeDiscoverClient()
+	n.isClient = initImmutableStorageClient()
 }
 
 // StartTCP() starts the HTTP server for client
 func (n *Node) StartHTTP() {
 	// Start HTTP server for web client
-	log.Printf("start http called \n")
+	logMsg("StartHTTP", "setting up HTTP server at localhost"+HTTP_SERVER_LISTEN_PORT)
 	hs := NewHTTPTransport(HTTP_SERVER_LISTEN_PORT)
 
 	hs.mux.HandleFunc("/GetMessage", n.handleGetMessage)
 	hs.mux.HandleFunc("/PostMessage", n.handlePostMessage)
 
 	go hs.StartServer()
+	logMsg("StartHTTP", "HTTP server running")
 }
 
 // StartTCP() starts the internode communicating TCP
 func (n *Node) StartTCP() {
-	listenAddr := TCP_SERVER_LISTEN_PORT
-	log.Printf("Node starts at %s \n", listenAddr)
-
-	listener, err := net.Listen("tcp", listenAddr)
+	logMsg("StartTCP", "setting up TCP server at"+TCP_SERVER_LISTEN_PORT)
+	listener, err := net.Listen("tcp", TCP_SERVER_LISTEN_PORT)
 	if err != nil {
 		log.Fatalf("failed to listen: %s \n", err)
 	}
+	logMsg("StartTCP", "TCP server running")
 
 	for {
 		conn, err := listener.Accept()
@@ -140,13 +128,13 @@ func (n *Node) handleConnection(conn net.Conn) {
 	msg := ProtocolMessage{}
 	err := gob.NewDecoder(conn).Decode(&msg)
 	if err != nil {
-		log.Printf("Error when handling connection from %s", conn.RemoteAddr().String())
+		logError("handleConnection", err, fmt.Sprintf("handling connection from %s", conn.RemoteAddr().String()))
 		defer conn.Close()
 		return
 	}
 	err = n.handleMessage(conn, msg)
 	if err != nil {
-		log.Printf("Error when handling message from %s, message = %v", conn.RemoteAddr().String(), msg)
+		logError("handleConnection", err, fmt.Sprintf("Error when handling message from %s, message = %v", conn.RemoteAddr().String(), msg))
 	}
 }
 
@@ -173,24 +161,16 @@ func (n *Node) handleMessage(conn net.Conn, msg ProtocolMessage) error {
 		if req, castSuccess := msg.Content.(CreateProxyReq); castSuccess {
 			return n.handleCreateProxyReq(conn, &req)
 		}
-
-	case DeleteCoverRequest:
-		if req, castSuccess := msg.Content.(DeleteCoverReq); castSuccess {
-			return n.handleDeleteCoverReq(conn, &req)
-		}
-
 	}
 	return errors.New("invalid incoming ProtocolMessage")
 }
 
 // A setup function for gob package to pre-register all encoding types before any sending tcp requests
-// TODO: Update the types and check if any missing types.
 func initGobTypeRegistration() {
 	gob.Register(&QueryPathReq{})
 	gob.Register(&DHKeyExchange{})
 	gob.Register(&ConnectPathReq{})
 	gob.Register(&CreateProxyReq{})
-	gob.Register(&DeleteCoverReq{})
 	gob.Register(&Path{})
 	gob.Register(&QueryPathResp{})
 	gob.Register(&VerifyCoverReq{})
@@ -211,20 +191,20 @@ func tcpSendAndWaitResponse[RESPONSE_TYPE any](reqBody *ProtocolMessage, destAdd
 		}
 	}()
 	if err != nil {
-		log.Printf("error when dial tcp addr: %s \n", err)
+		logError("tcpSendAndWaitResponse", err, fmt.Sprintf("error at net.Dial('tcp', destAddr) where destAddr = %v", destAddr))
 		return nil, nil, err
 	}
 	defer conn.Close()
 
 	err = gob.NewEncoder(conn).Encode(*reqBody)
 	if err != nil {
-		log.Printf("Error when sending tcp request: %s \n", err)
+		logError("tcpSendAndWaitResponse", err, fmt.Sprintf("error at gob.NewEncoder(conn).Encode(*reqBody) where *reqBody = %v", *reqBody))
 		return nil, nil, err
 	}
 
 	response, err := waitForResponse[RESPONSE_TYPE](conn)
 	if err != nil {
-		log.Printf("Error when receiving tcp request: %s \n", err)
+		logError("tcpSendAndWaitResponse", err, fmt.Sprintf("error at waitForResponse[RESPONSE_TYPE](conn) where conn.RemoteAddr().String() = %v", conn.RemoteAddr().String()))
 		return nil, nil, err
 	}
 	return response, &conn, nil
@@ -285,9 +265,7 @@ func (n *Node) sendVerifyCoverRequest(addr string, coverToBeVerified string) (*V
 }
 
 func (n *Node) sendConnectPathRequest(addr string, treeID uuid.UUID, n3X DHKeyExchange) (*ConnectPathResp, *net.Conn, error) {
-	n.peerPublicKeysRWLock.RLock()
-	targetPublicKey, found := n.peerPublicKeys[addr]
-	n.peerPublicKeysRWLock.RUnlock()
+	targetPublicKey, found := n.peerPublicKeys.getValue(addr)
 	if !found {
 		return nil, nil, errors.New("public key of " + addr + " is unknown")
 	}
@@ -308,7 +286,7 @@ func (n *Node) sendConnectPathRequest(addr string, treeID uuid.UUID, n3X DHKeyEx
 	return tcpSendAndWaitResponse[ConnectPathResp](&connectPathReq, addr, true)
 }
 
-// TODO(@SauDoge) request a proxy triggered by empty path in pathResp
+// request a proxy triggered by empty path in pathResp
 func (n *Node) sendCreateProxyRequest(addr string, n3X DHKeyExchange) (*CreateProxyResp, *net.Conn, error) {
 	createProxyRequest := ProtocolMessage{
 		Type: CreateProxyRequest,
@@ -321,24 +299,10 @@ func (n *Node) sendCreateProxyRequest(addr string, n3X DHKeyExchange) (*CreatePr
 	return tcpSendAndWaitResponse[CreateProxyResp](&createProxyRequest, addr, true)
 }
 
-func (n *Node) sendDeleteCoverRequest(addr string) {
-	deleteCoverRequest := ProtocolMessage{
-		Type:    DeleteCoverRequest,
-		Content: DeleteCoverReq{},
-	}
-
-	// Ignore any error, as we do not expect response
-	if conn, err := net.Dial("tcp", addr); err == nil {
-		defer conn.Close()
-		gob.NewEncoder(conn).Encode(deleteCoverRequest)
-	}
-}
-
 // ACTIONS function, including:
 // 1. QueryPath
 // 2. ConnectPath
 // 3. CreateProxy
-// 4. DeletePath
 
 // ACTIONS vs sendXXXRequest:
 // sendXXXRequest is just one of the steps of an ACTION, which simply sends out a request struct, and wait for a response struct to return.
@@ -350,9 +314,7 @@ func (n *Node) QueryPath(addr string) (*QueryPathResp, error) {
 	resp, err := n.sendQueryPathRequest(addr)
 	if err == nil {
 		// Cache the public key
-		n.peerPublicKeysRWLock.Lock()
-		defer n.peerPublicKeysRWLock.Unlock()
-		n.peerPublicKeys[addr] = resp.NodePublicKey
+		n.peerPublicKeys.setValue(addr, resp.NodePublicKey)
 
 		// Cache the verified paths as 'halfOpenPaths'
 		paths := resp.Paths
@@ -371,10 +333,7 @@ func (n *Node) QueryPath(addr string) (*QueryPathResp, error) {
 			// Ask my next-next hop to verify if my next-hop is one of its cover nodes
 			verifyCoverResp, err := n.sendVerifyCoverRequest(halfOpenPath.next2, halfOpenPath.next)
 			if err == nil && verifyCoverResp.IsVerified {
-				n.halfOpenPathsRWLock.Lock()
-				n.halfOpenPath[pathID] = halfOpenPath
-				n.halfOpenPathsRWLock.Unlock()
-
+				n.halfOpenPath.setValue(pathID, halfOpenPath)
 				n.pendingHalfOpenPaths <- halfOpenPath.uuid
 			}
 		}
@@ -394,35 +353,29 @@ func (n *Node) ConnectPath(addr string, treeID uuid.UUID) (*ConnectPathResp, err
 	}
 
 	if resp.Status {
-		n.halfOpenPathsRWLock.Lock()
-		n.pathsRWLock.Lock()
-		n.openConnectionsRWLock.Lock()
-		defer n.halfOpenPathsRWLock.Unlock()
-		defer n.pathsRWLock.Unlock()
-		defer n.openConnectionsRWLock.Unlock()
-
 		// retrieve the half open path profile
-		halfOpenPathProfile, found := n.halfOpenPath[treeID]
+		halfOpenPathProfile, found := n.halfOpenPath.getValue(treeID)
 		if !found {
 			return resp, errors.New("halfOpenPath not found")
 		}
 		// delete the half open path profile, as it is completely 'open'.
-		delete(n.halfOpenPath, treeID)
+		n.halfOpenPath.deleteValue(treeID)
 
 		// create new path profile
-		n.paths[treeID] = PathProfile{
-			uuid:        treeID,
-			next:        addr,
-			next2:       halfOpenPathProfile.next,
-			proxyPublic: halfOpenPathProfile.proxyPublic,
-			symKey:      resp.KeyExchange.GetSymKey(*myKeyExchangeSecret),
-			pathStat:    newPathStat(),
-		}
+		n.paths.setValue(treeID, PathProfile{
+			uuid:         treeID,
+			next:         addr,
+			next2:        halfOpenPathProfile.next,
+			proxyPublic:  halfOpenPathProfile.proxyPublic,
+			symKey:       resp.KeyExchange.GetSymKey(*myKeyExchangeSecret),
+			successCount: 0,
+			failureCount: 0,
+		})
 
 		// Start the sendCoverMessageWorker
 		go n.sendCoverMessageWorker(*connPtr, COVER_MESSAGE_SENDING_INTERVAL, treeID)
 		// Store a pointer to the opened tcp connection for later publish jobs
-		n.openConnections[treeID] = connPtr
+		n.openConnections.setValue(treeID, *connPtr)
 	}
 	return resp, nil
 }
@@ -443,17 +396,16 @@ func (n *Node) CreateProxy(addr string) (*CreateProxyResp, error) {
 		if err != nil {
 			return nil, errors.New("malformed encryptedTreeUUID")
 		}
-		n.pathsRWLock.Lock()
 		// create new path profile
-		n.paths[treeID] = PathProfile{
-			uuid:        treeID,
-			next:        addr,
-			next2:       "IPFS",
-			proxyPublic: resp.Public,
-			symKey:      resp.KeyExchange.GetSymKey(*myKeyExchangeSecret),
-			pathStat:    newPathStat(),
-		}
-		n.pathsRWLock.Unlock()
+		n.paths.setValue(treeID, PathProfile{
+			uuid:         treeID,
+			next:         addr,
+			next2:        "ImmutableStorage",
+			proxyPublic:  resp.Public,
+			symKey:       resp.KeyExchange.GetSymKey(*myKeyExchangeSecret),
+			successCount: 0,
+			failureCount: 0,
+		})
 
 		// Start the sendCoverMessageWorker
 		go n.sendCoverMessageWorker(*connPtr, COVER_MESSAGE_SENDING_INTERVAL, treeID)
@@ -461,85 +413,55 @@ func (n *Node) CreateProxy(addr string) (*CreateProxyResp, error) {
 	return resp, nil
 }
 
-func (n *Node) DeletePath(addr string) {
-	n.sendDeleteCoverRequest(addr)
-	//TODO
-}
-
 // END of ACTIONs =====================
 
-// TODO(@SauDoge) move up one step
-func (n *Node) MoveUpVoluntarily(uuid0 uuid.UUID) {
-	n.pathsRWLock.Lock()
-	defer n.pathsRWLock.Unlock()
-
-	value, ok := n.paths[uuid0]
+// move up one step
+func (n *Node) MoveUp(pathID uuid.UUID) {
+	value, ok := n.paths.getValue(pathID)
 	if ok {
 		originalNext := value.next
 		originalNextNext := value.next2
-		// 1) send verifyCover(originalNext) to originNextNext
+		// 1) check what originalNextNext is
+		if originalNextNext == "ImmutableStorage" {
+			// next-next-hop is ImmutableStorage --> next-hop is proxy --> cannot move up, delete this blacklist path
+			n.paths.deleteValue(pathID)
+			return
+		}
+		// 2) send verifyCover(originalNext) to originNextNext
 		resp, err := n.sendVerifyCoverRequest(originalNextNext, originalNext)
 		if err != nil {
+			// next-next-hop is unreachable --> cannot move up, delete this blacklist path
+			n.paths.deleteValue(pathID)
 			return
 		}
 		if resp.IsVerified {
-			// 2) check what originalNextNext is
-			if originalNextNext != "ImmutableStorage" {
-				// connectPath with originalNextNext
-				resp, _ := n.ConnectPath(originalNextNext, uuid0)
-				if resp.Status {
-					return
-				}
+			// connectPath with originalNextNext, it will overwrite the current blacklist path
+			resp, _ := n.ConnectPath(originalNextNext, pathID)
+			if resp.Status {
+				// if success, done
+				return
 			}
 		}
 
-		// 3) if resp is not verified OR original Next Next== IPFS OR connectPath failed
+		// 3) if resp is not verified OR connectPath failed
 		// self becomes proxy
-		newPathProfile := &PathProfile{uuid: uuid.New(), next: "ImmutableStorage", next2: "", proxyPublic: n.publicKey, pathStat: newPathStat()}
-		n.removePathProfile(uuid0)
-		for k, v := range n.covers {
-			if v.treeUUID == uuid0 {
-				n.removeCoversProfile(k)
+		newPathProfile := PathProfile{
+			uuid:         uuid.New(),
+			next:         "ImmutableStorage",
+			next2:        "",
+			proxyPublic:  n.publicKey,
+			successCount: 0,
+			failureCount: 0,
+		}
+		// delete cover nodes that are connected to the old blacklist path
+		n.covers.iterate(func(coverIP string, coverProfile CoverNodeProfile) {
+			if coverProfile.treeUUID == pathID {
+				delete(n.covers.data, coverIP)
 			}
-		}
-		n.paths[newPathProfile.uuid] = *newPathProfile
-
-	} else {
-		return
+		}, false)
+		n.paths.deleteValue(pathID)
+		n.paths.setValue(newPathProfile.uuid, newPathProfile)
 	}
-}
-
-func (n *Node) MoveUpInvoluntarily(treeID uuid.UUID, isNextProxy bool, newNextNext string) {
-
-	n.pathsRWLock.Lock()
-	defer n.pathsRWLock.Unlock()
-
-	if isNextProxy { // treeId is the new Tree ID, newNextNext is the IP of new Proxy
-
-		// find the path in n.paths that contains the new proxy and remove it
-		for idx, v := range n.paths {
-			if v.next == newNextNext {
-				n.removePathProfile(idx)
-				break
-			}
-		}
-		resp, _ := n.ConnectPath(newNextNext, treeID)
-		if resp.Status {
-			return
-		} else {
-			go n.MoveUpVoluntarily(treeID)
-		}
-
-	} else { // treeId is the old Tree ID, newNextNext =
-		value, ok := n.paths[treeID]
-		if ok {
-			// modify self.paths
-			value.next2 = newNextNext
-		} else {
-			return
-		}
-	}
-
 }
 
 func (n *Node) getNextHalfOpenPath() (*PathProfile, error) {
@@ -548,12 +470,8 @@ func (n *Node) getNextHalfOpenPath() (*PathProfile, error) {
 	alreadyConnected := true
 	for alreadyConnected {
 		halfOpenPathID := <-n.pendingHalfOpenPaths
-		n.halfOpenPathsRWLock.RLock()
-		n.pathsRWLock.RLock()
-		defer n.halfOpenPathsRWLock.RUnlock()
-		defer n.pathsRWLock.RUnlock()
-		result, found = n.halfOpenPath[halfOpenPathID]
-		_, alreadyConnected = n.paths[halfOpenPathID]
+		result, found = n.halfOpenPath.getValue(halfOpenPathID)
+		_, alreadyConnected = n.paths.getValue(halfOpenPathID)
 	}
 	if found && !alreadyConnected {
 		return &result, nil
@@ -563,12 +481,12 @@ func (n *Node) getNextHalfOpenPath() (*PathProfile, error) {
 }
 
 // Tree Formation Process by aggregating QueryPath, CreateProxy, ConnectPath & joining cluster
-func (n *Node) formTree() {
+func (n *Node) fulfillPublishCondition() {
 	// Starts a worker looping through all members to accumulate halfOpenPaths
 	ctx, stopWorker := context.WithCancel(context.Background())
 	go n.populateHalfOpenPathsWorker(ctx)
 
-	for len(n.paths) < TARGET_NUMBER_OF_CONNECTED_PATHS {
+	for n.paths.getSize() < TARGET_NUMBER_OF_CONNECTED_PATHS {
 		if halfOpenPath, err := n.getNextHalfOpenPath(); err == nil {
 			// if success, it will insert records in n.paths
 			n.ConnectPath(halfOpenPath.next, halfOpenPath.uuid)
@@ -577,52 +495,29 @@ func (n *Node) formTree() {
 	stopWorker()
 }
 
-// Tree Formation Process with a particular target next hop, can fail.
-func (n *Node) formTreeWithTarget(targetAddr string, targetPathID uuid.UUID) error {
-	n.pathsRWLock.RLock()
-	defer n.pathsRWLock.RUnlock()
-	if _, pathIsConnected := n.paths[targetPathID]; pathIsConnected {
-		return errors.New("pathID is already connected")
-	}
-	resp, err := n.QueryPath(targetAddr)
-	if err != nil {
-		return err
-	}
-	for _, path := range resp.Paths {
-		respPathID, err := DecryptUUID(path.EncryptedTreeUUID, n.privateKey)
-		if err == nil && respPathID == targetPathID {
-			_, err = n.ConnectPath(targetAddr, targetPathID)
-			return err
-		}
-	}
-	return errors.New("pathID does not exists in the targetAddr node")
-}
-
-// TODO(@SauDoge): return the publishJobId should be enough, such that other function can simply check the map
+// return the publishJobId, such that user can check if the message has been successfully published
 func (n *Node) Publish(key is.Key, message []byte) (uuid.UUID, error) {
 	// 1) Check tree formation status
 	// a) the node has connected to at least one path
 	// b) has at least k cover nodes
 
 	// In Case Move up() when trying to send a message
-	n.coversRWLock.Lock()
-	n.pathsRWLock.Lock()
-	if len(n.covers) < 10 || len(n.paths) < 1 {
-		defer n.coversRWLock.Unlock()
-		defer n.pathsRWLock.Unlock()
+	n.covers.lock.Lock()
+	n.paths.lock.Lock()
+	defer n.covers.lock.Unlock()
+	defer n.paths.lock.Unlock()
+	// without locking paths and covers, check canPublish
+	if n.canPublish(false) {
 		return uuid.Nil, errors.New("publishing condition not met")
 	}
-	n.coversRWLock.Unlock()
 	// 2) Validate the key
 	isValdiated := is.ValidateKey(key, message)
 	if !isValdiated {
 		return uuid.Nil, errors.New("key not valid")
 	}
 	// 3) Pick a path
-	pathID, randomPathProfile := pick(n.paths, n.pathsRWLock)
-	conn := *n.openConnections[pathID]
-
-	n.pathsRWLock.Unlock()
+	pathID, randomPathProfile := pick(n.paths.data, nil)
+	conn, _ := n.openConnections.getValue(pathID)
 
 	// 4) encrypt the data message to application message
 	dataMessage := DataMessage{Key: key, Content: message}
@@ -632,17 +527,14 @@ func (n *Node) Publish(key is.Key, message []byte) (uuid.UUID, error) {
 	}
 
 	// 5) send the application message to the next hop
-	// TODO: mentions re-use conn but dont know where, need to find out
 	err = gob.NewEncoder(conn).Encode(am)
 	if err != nil {
 		return uuid.Nil, errors.New("error when sending tcp request")
 	}
 
 	// 6) update the publishingJob map
-	n.publishJobsRWLock.Lock()
 	newJobID := uuid.New()
-	n.publishJobs[newJobID] = PublishJobProfile{Key: key[:], Status: PENDING, OnPath: randomPathProfile.uuid}
-	n.publishJobsRWLock.Unlock()
+	n.publishJobs.setValue(newJobID, PublishJobProfile{Key: key[:], Status: PENDING, OnPath: randomPathProfile.uuid})
 
 	// 7) initiate checkPublishJobStatusWorker()
 	go n.checkPublishJobStatusWorker(newJobID)
@@ -656,45 +548,15 @@ func (n *Node) Read(key string) ([]byte, error) {
 	return resp.Content, err
 }
 
-func (n *Node) GetPaths() []PathProfile {
-	result := []PathProfile{}
-	for _, val := range n.paths {
-		result = append(result, val)
-	}
-	return result
-}
-
-// TODO(@SauDoge)
-func (n *Node) AddProxyRole() (bool, error) {
-	// 1) if total number of cover nodes reach maximum, return false, error
-	// 2) status check on IS
-	// 	2.1) if failed: return false, error
-	// 	2.2) if success: create a new pathProfile and add to n.paths
-	// 		2.2.1) return true, nil
-	return false, errors.New("unimplemented error")
-}
-
-// TODO(@SauDoge)
-func (n *Node) AddCover(coverIP string, treeUUID uuid.UUID, secret []byte) bool {
-	// 1) if total number of cover nodes reach maximum, return false
-	// 2) create new cover mapping and add to n.covers
-	// 3) wait for cover message from this new cover for k minute
-	// 	3.1) if failed: call DeleteCover()
-	// 	3.2) if success: return true
-
-	return false
-}
-
-func (n *Node) DeleteCover(coverIP string) {
-	delete(n.covers, coverIP)
-}
-
-// TODO(@SauDoge)
 func (n *Node) Forward(asymOutput []byte, coverIP string) error {
-
-	correctTree := n.covers[coverIP].treeUUID
-	correctSymKey := n.paths[correctTree].symKey
-	nextHop := n.paths[correctTree].next
+	senderCover, found := n.covers.getValue(coverIP)
+	if !found {
+		return errors.New("failed to forward a real message from a non-cover node")
+	}
+	forwardingPath, found := n.paths.getValue(senderCover.treeUUID)
+	if !found {
+		return errors.New("failed to forward a real message to a removed path")
+	}
 
 	// 1) symmetric encryption
 	symInput := SymmetricEncryptDataMessage{
@@ -707,7 +569,7 @@ func (n *Node) Forward(asymOutput []byte, coverIP string) error {
 		return err
 	}
 
-	symOutput, err := SymmetricEncrypt(symInputInBytes, correctSymKey)
+	symOutput, err := SymmetricEncrypt(symInputInBytes, forwardingPath.symKey)
 	if err != nil {
 		return err
 	}
@@ -718,22 +580,18 @@ func (n *Node) Forward(asymOutput []byte, coverIP string) error {
 
 	// 2) send to the next hop
 	// we can identify the correct next hop by the uuid of the tree
-	conn, err := net.Dial("tcp", nextHop)
-	if err != nil {
-		return errors.New("error when dial tcp addr")
-	}
-	defer conn.Close()
+	conn, _ := n.openConnections.getValue(forwardingPath.uuid)
 
 	err = gob.NewEncoder(conn).Encode(am)
 	if err != nil {
-		return errors.New("error when sending tcp request")
+		return errors.New("error when forwarding real message")
 	}
 
 	return nil
 }
 
 // ****************
-// TODO(@SauDoge): Handlers for tcp communication
+// Handlers for tcp communication
 // ****************
 
 func (n *Node) handleQueryPathReq(conn net.Conn, content *QueryPathReq) error {
@@ -743,12 +601,12 @@ func (n *Node) handleQueryPathReq(conn net.Conn, content *QueryPathReq) error {
 		Paths:         []Path{},
 	}
 	requesterPublicKey := content.PublicKey
-	if len(n.paths) > 0 {
-		for _, path := range n.paths {
+	if n.paths.getSize() > 0 {
+		n.paths.iterate(func(pathID uuid.UUID, path PathProfile) {
 			encryptedPathID, err := EncryptUUID(path.uuid, requesterPublicKey)
 			if err != nil {
 				logProtocolMessageHandlerError("handleQueryPathReq", conn, err, content)
-				continue
+				return
 			}
 			queryPathResp.Paths = append(queryPathResp.Paths, Path{
 				EncryptedTreeUUID: encryptedPathID,
@@ -756,7 +614,7 @@ func (n *Node) handleQueryPathReq(conn net.Conn, content *QueryPathReq) error {
 				NextNextHop:       path.next2,
 				ProxyPublicKey:    path.proxyPublic,
 			})
-		}
+		}, true)
 	}
 	protocolMessage := ProtocolMessage{
 		Type:    QueryPathResponse,
@@ -772,7 +630,7 @@ func (n *Node) handleQueryPathReq(conn net.Conn, content *QueryPathReq) error {
 
 func (n *Node) handleVerifyCoverReq(conn net.Conn, content *VerifyCoverReq) error {
 	coverToBeVerified := content.NextHop
-	_, isVerified := n.covers[coverToBeVerified]
+	_, isVerified := n.covers.getValue(coverToBeVerified)
 
 	verifyCoverResp := VerifyCoverResp{
 		IsVerified: isVerified,
@@ -787,9 +645,7 @@ func (n *Node) handleVerifyCoverReq(conn net.Conn, content *VerifyCoverReq) erro
 
 func (n *Node) handleConnectPathReq(conn net.Conn, content *ConnectPathReq) error {
 	// check number of cover nodes
-	n.coversRWLock.RLock()
-	defer n.coversRWLock.RUnlock()
-	shouldAcceptConnection := len(n.covers) < MAXIMUM_NUMBER_OF_COVER_NODES
+	shouldAcceptConnection := n.covers.getSize() < MAXIMUM_NUMBER_OF_COVER_NODES
 
 	var connectPathResponse ProtocolMessage
 
@@ -809,11 +665,11 @@ func (n *Node) handleConnectPathReq(conn net.Conn, content *ConnectPathReq) erro
 		secretKey := requesterKeyExchangeInfo.GetSymKey(*myKeyExchangeSecret)
 
 		// add incoming node as a cover node
-		n.covers[conn.RemoteAddr().String()] = CoverNodeProfile{
+		n.covers.setValue(conn.RemoteAddr().String(), CoverNodeProfile{
 			cover:     conn.RemoteAddr().String(),
 			secretKey: secretKey,
 			treeUUID:  requestedPath,
-		}
+		})
 
 		connectPathResponse = ProtocolMessage{
 			Type: ConnectPathResponse,
@@ -843,9 +699,7 @@ func (n *Node) handleConnectPathReq(conn net.Conn, content *ConnectPathReq) erro
 
 func (n *Node) handleCreateProxyReq(conn net.Conn, content *CreateProxyReq) error {
 	// check number of cover nodes
-	n.coversRWLock.RLock()
-	defer n.coversRWLock.RUnlock()
-	shouldAcceptConnection := len(n.covers) < MAXIMUM_NUMBER_OF_COVER_NODES
+	shouldAcceptConnection := n.covers.getSize() < MAXIMUM_NUMBER_OF_COVER_NODES
 
 	var createProxyResponse ProtocolMessage
 
@@ -859,20 +713,20 @@ func (n *Node) handleCreateProxyReq(conn net.Conn, content *CreateProxyReq) erro
 
 		// new path as self becomes the starting point of a new path
 		newPathID, _ := uuid.NewUUID()
-		n.paths[newPathID] = PathProfile{
+		n.paths.setValue(newPathID, PathProfile{
 			uuid:        newPathID,
 			next:        "ImmutableStorage", // Use a value tag to reflect that the next hop is ImmutableStorage
 			next2:       "",                 // There is no next-next hop
 			symKey:      secretKey,
 			proxyPublic: n.publicKey,
-		}
+		})
 
 		// new cover node
-		n.covers[conn.RemoteAddr().String()] = CoverNodeProfile{
+		n.covers.setValue(conn.RemoteAddr().String(), CoverNodeProfile{
 			cover:     conn.RemoteAddr().String(),
 			secretKey: secretKey,
 			treeUUID:  newPathID,
-		}
+		})
 
 		// send a create proxy response back
 		encryptedPathID, err := EncryptUUID(newPathID, requesterPublicKey)
@@ -909,20 +763,14 @@ func (n *Node) handleCreateProxyReq(conn net.Conn, content *CreateProxyReq) erro
 	return err
 }
 
-func (n *Node) handleDeleteCoverReq(conn net.Conn, _ *DeleteCoverReq) error {
-	requesterIP := conn.RemoteAddr().String()
-	delete(n.covers, requesterIP)
-	return nil
-}
-
 // ****************
-// TODO: Handlers for Application Messages, ie. real and cover message
+// Handlers for Application Messages, ie. real and cover message
 // ****************
 
 func (n *Node) handleApplicationMessage(rawMessage ApplicationMessage, coverIp string) error {
-	// TODO:
 	// 1. Symmetric Decrypt.
-	symmetricKey := n.covers[coverIp].secretKey
+	coverProfile, _ := n.covers.getValue(coverIp)
+	symmetricKey := coverProfile.secretKey
 	symOutput := rawMessage.SymmetricEncryptedPayload
 	symInputBytes, err := SymmetricDecrypt(symOutput, symmetricKey)
 	if err != nil {
@@ -970,17 +818,16 @@ func (n *Node) handleRealMessage(asymOutput []byte) error {
 		log.Printf("[Proxy.Store: Status = %v]:Key=%s", resp.Success, string(key[:]))
 	} else {
 		// Call Forward
-		n.pathsRWLock.Lock()
-		defer n.pathsRWLock.RUnlock()
-		randI := rand.Intn(len(n.paths))
+		randI := rand.Intn(n.paths.getSize())
 		i := 0
-		for _, path := range n.paths {
+		forwardError := errors.New("unknown error during Forward")
+		n.paths.iterate(func(pathID uuid.UUID, path PathProfile) {
 			if i == randI {
-				return n.Forward(asymOutput, path.next)
+				forwardError = n.Forward(asymOutput, path.next)
 			}
 			i++
-		}
-		return errors.New("unknown error during Forward")
+		}, true)
+		return forwardError
 	}
 	return nil
 }
@@ -1026,7 +873,6 @@ func (n *Node) handleGetMessage(w http.ResponseWriter, req *http.Request) {
 
 }
 
-// TODO(@SauDoge): Forward Implementation locked
 func (n *Node) handlePostMessage(w http.ResponseWriter, req *http.Request) {
 	decoder := json.NewDecoder(req.Body)
 	var message DataMessage

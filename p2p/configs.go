@@ -7,7 +7,8 @@ const APPLICATION_MESSAGE_RECEIVING_INTERVAL time.Duration = 15 * time.Second
 const PUBLISH_JOB_FAILED_TIMEOUT time.Duration = 10 * time.Minute
 const PUBLISH_JOB_CHECKING_INTERVAL time.Duration = 30 * time.Second
 const TCP_REQUEST_TIMEOUT time.Duration = 10 * time.Second
-const MOVE_UP_REQUIREMENT_CHECKING_INTERVAL time.Duration = 1 * time.Minute
+const MAINTAIN_PATHS_HEALTH_CHECKING_INTERVAL time.Duration = 1 * time.Minute
+const PUBLISH_CONDITION_CHECKING_INTERVAL time.Duration = 1 * time.Minute
 
 const HALF_OPEN_PATH_BUFFER_SIZE int = 10000
 const TARGET_NUMBER_OF_CONNECTED_PATHS int = 3

@@ -82,7 +82,6 @@ type DHKeyExchange struct {
 
 // 32 bytes
 func RandomBigInt(numOfBytes int) *big.Int {
-	// TODO: figure out how many bit is required
 	randomInt := new(big.Int)
 	randomBytes := make([]byte, numOfBytes)
 

@@ -21,13 +21,15 @@ type ImmutableStorageClient struct {
 	client isProtos.ImmutableStorageClient
 }
 
-func (nc *NodeDiscoveryClient) New() {
-	conn, err := grpc.Dial(NODE_DISCOVERY_SERVER_LISTEN_PORT, grpc.WithInsecure())
+func (nc *NodeDiscoveryClient) New() error {
+	addr := "localhost" + NODE_DISCOVERY_SERVER_LISTEN_PORT
+	conn, err := grpc.Dial(addr, grpc.WithInsecure(), grpc.WithBlock())
 	if err != nil {
 		log.Fatalf("Cannot connect to Node Discovery: %s \n", err)
+		return err
 	}
-
 	nc.client = ndProtos.NewNodeDiscoveryClient(conn)
+	return nil
 }
 
 func (nc *NodeDiscoveryClient) JoinCluster(ip string) (*ndProtos.JoinClusterResponse, error) {
@@ -48,12 +50,14 @@ func (nc *NodeDiscoveryClient) GetMembers() (*ndProtos.GetMembersReponse, error)
 	return nc.client.GetMembers(ctx, &ndProtos.GetMembersRequest{})
 }
 
-func (ic *ImmutableStorageClient) New() {
-	conn, err := grpc.Dial(IMMUTABLE_STORAGE_SERVER_LISTEN_PORT, grpc.WithInsecure())
+func (ic *ImmutableStorageClient) New() error {
+	conn, err := grpc.Dial(IMMUTABLE_STORAGE_SERVER_LISTEN_PORT, grpc.WithInsecure(), grpc.WithBlock())
 	if err != nil {
 		log.Fatalf("Cannot connect to Immutable Storage: %s \n", err)
+		return err
 	}
 	ic.client = isProtos.NewImmutableStorageClient(conn)
+	return nil
 }
 
 func (ic *ImmutableStorageClient) Store(key blueprint.Key, body []byte) (*isProtos.StoreResponse, error) {
@@ -81,20 +85,25 @@ func (ic *ImmutableStorageClient) IsDiscovered(key []byte) (*isProtos.IsDiscover
 }
 
 func initNodeDiscoverClient() *NodeDiscoveryClient {
+	logMsg("initNodeDiscoverClient", "connecting to Node-Discovery...")
 	nd := &NodeDiscoveryClient{}
-	nd.New()
-	_, err := nd.GetMembers()
-	if err != nil {
-		log.Fatalf("Cannot get member from node discovery %s \n", err)
+	err := nd.New()
+	for err != nil {
+		logError("initNodeDiscoverClient", err, "Retry connect to Node-Discovery after 1 second...")
+		time.Sleep(time.Second)
+		err = nd.New()
 	}
-
-	// iterate until the first alive member
-	// nd.members = resp.Member
 	return nd
 }
 
 func initImmutableStorageClient() *ImmutableStorageClient {
+	logMsg("initImmutableStorageClient", "connecting to Immutable-Storage...")
 	is := &ImmutableStorageClient{}
-	is.New()
+	err := is.New()
+	for err != nil {
+		logError("initImmutableStorageClient", err, "Retry connect to Immutable-Storage after 1 second...")
+		time.Sleep(time.Second)
+		err = is.New()
+	}
 	return is
 }
