@@ -3,7 +3,7 @@ package p2p
 import (
 	"context"
 	"encoding/gob"
-	"log"
+	"fmt"
 	"net"
 	"sync"
 	"time"
@@ -123,12 +123,16 @@ func (node *Node) canPublish(lock bool) bool {
 
 // publishJobStatusChecker will monitor the status of a publish job for a given timeout.
 func (node *Node) checkPublishJobStatusWorker(jobID uuid.UUID) {
+
+	logMsg("checkPublishJobStatusWorker", fmt.Sprintf("Started, JobID: %v", jobID.String()))
+
 	timeout := PUBLISH_JOB_FAILED_TIMEOUT
 	checkInterval := PUBLISH_JOB_CHECKING_INTERVAL
 
 	// check if the job really exists
 	publishJobProfile, jobExists := node.publishJobs.getValue(jobID)
 	if !jobExists {
+		logMsg("checkPublishJobStatusWorker", fmt.Sprintf("JobID %v does not exist", jobID.String()))
 		return
 	}
 
@@ -161,12 +165,18 @@ func (node *Node) checkPublishJobStatusWorker(jobID uuid.UUID) {
 	}
 	cancel()
 	node.markPublishJobStatus(jobID, publishJobProfile)
+	logMsg("checkPublishJobStatusWorker", fmt.Sprintf("Ended, JobID: %v, Status: %d", jobID.String(), publishJobProfile.Status))
+
 }
 
 func (node *Node) maintainPathsHealthWorker() {
+
+	logMsg("maintainPathsHealthWorker", "Started")
+
 	var moveUpWg sync.WaitGroup
 	var fixPathWg sync.WaitGroup
 	for {
+		logMsg("maintainPathsHealthWorker", "Iteration Starts")
 		for _, pathID := range node.blacklistPathIDs() {
 			moveUpWg.Add(1)
 			go func(pathID uuid.UUID) {
@@ -175,6 +185,7 @@ func (node *Node) maintainPathsHealthWorker() {
 			}(pathID)
 		}
 		moveUpWg.Wait()
+		logMsg("maintainPathsHealthWorker", "Blacklist Paths Check Done")
 
 		for _, report := range node.invalidPathProfiles() {
 			fixPathWg.Add(1)
@@ -191,22 +202,30 @@ func (node *Node) maintainPathsHealthWorker() {
 			}(report)
 		}
 		fixPathWg.Wait()
-
+		logMsg("maintainPathsHealthWorker", "Invalid Paths Check Done")
+		logMsg("maintainPathsHealthWorker", "Iteration Ends")
 		time.Sleep(MAINTAIN_PATHS_HEALTH_CHECKING_INTERVAL)
 	}
 }
 
 func (node *Node) checkPublishConditionWorker() {
+
+	logMsg("checkPublishConditionWorker", "Started")
+
 	for {
+
 		if !node.canPublish(true) {
 			node.fulfillPublishCondition()
 		}
+
 		time.Sleep(PUBLISH_CONDITION_CHECKING_INTERVAL)
 	}
+
 }
 
 func (node *Node) sendCoverMessageWorker(conn net.Conn, interval time.Duration, pathID uuid.UUID) {
-	log.Printf("sendCoverMessageWorker to %s is started successfully.\n", conn.RemoteAddr().String())
+
+	logMsg("sendCoverMessageWorker", fmt.Sprintf("sendCoverMessageWorker to %s on path %v is started successfully.", conn.RemoteAddr().String(), pathID.String()))
 
 	encoder := gob.NewEncoder(conn)
 
@@ -234,17 +253,20 @@ func (node *Node) sendCoverMessageWorker(conn net.Conn, interval time.Duration, 
 		// check if terminated
 		select {
 		case err := <-doneErr:
-			log.Printf("[Error]:sendCoverMessageWorker when sending cover message to %s: %v\n", conn.RemoteAddr().String(), err)
+			logError("sendCoverMessageWorker", err, fmt.Sprintf("error when sending cover message to %s", conn.RemoteAddr().String()))
 			node.paths.deleteValue(pathID)
 			return
 		case <-doneSuccess:
+
+			logMsg("sendCoverMessageWorker", fmt.Sprintf("cover message to %s on path %v is sent successfully.", conn.RemoteAddr().String(), pathID.String()))
+
 			time.Sleep(interval)
 		}
 	}
 }
 
-func (node *Node) handleApplicationMessageWorker(conn net.Conn, maxInterval time.Duration) {
-	log.Printf("handleApplicationMessageWorker from %s is started successfully.\n", conn.RemoteAddr().String())
+func (node *Node) handleApplicationMessageWorker(conn net.Conn) {
+	logMsg("handleApplicationMessageWorker", fmt.Sprintf("handleApplicationMessageWorker from %s is started", conn.RemoteAddr().String()))
 
 	coverIp := conn.RemoteAddr().String()
 	decoder := gob.NewDecoder(conn)
@@ -259,7 +281,7 @@ func (node *Node) handleApplicationMessageWorker(conn net.Conn, maxInterval time
 			msg := ApplicationMessage{}
 			err := decoder.Decode(&msg)
 			if err != nil {
-				log.Printf("[Error]:handleApplicationMessageWorker when receiving application message from %s: %v\n", conn.RemoteAddr().String(), err)
+
 				doneErr <- err
 			} else {
 				doneSuccess <- msg
@@ -269,14 +291,14 @@ func (node *Node) handleApplicationMessageWorker(conn net.Conn, maxInterval time
 		select {
 		case msg := <-doneSuccess:
 			if err := node.handleApplicationMessage(msg, coverIp); err != nil {
-				log.Printf("[Error]:handleApplicationMessage: %v\n", err)
+				logError("handleApplicationMessageWorker", err, fmt.Sprintf("failed to handle application message from %v: %v", coverIp, msg))
 			}
 		case err := <-doneErr:
-			log.Printf("handleApplicationMessageWorker from %s: RECEIVE ERROR: %v\n", conn.RemoteAddr().String(), err)
+			logError("handleApplicationMessageWorker", err, fmt.Sprintf("error when receiving application message from %s", conn.RemoteAddr().String()))
 			node.covers.deleteValue(coverIp)
 			return
-		case <-time.After(maxInterval):
-			log.Printf("handleApplicationMessageWorker from %s: COVER MESSAGE TIMEOUT.\n", conn.RemoteAddr().String())
+		case <-time.After(APPLICATION_MESSAGE_RECEIVING_INTERVAL):
+			logMsg("handleApplicationMessageWorker", fmt.Sprintf("handleApplicationMessageWorker from %s: COVER MESSAGE TIMEOUT.\n", conn.RemoteAddr().String()))
 			node.covers.deleteValue(coverIp)
 			return
 		}

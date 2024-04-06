@@ -104,25 +104,30 @@ func (n *Node) StartHTTP() {
 	hs.mux.HandleFunc("/publish-job", n.handleGetPublishJobStatus)
 
 	go hs.StartServer()
+
 	logMsg("StartHTTP", "HTTP server running")
 }
 
 // StartTCP() starts the internode communicating TCP
 func (n *Node) StartTCP() {
+
 	logMsg("StartTCP", "setting up TCP server at"+TCP_SERVER_LISTEN_PORT)
+
 	listener, err := net.Listen("tcp", TCP_SERVER_LISTEN_PORT)
 	if err != nil {
 		log.Printf("failed to listen: %s \n", err)
 	}
+
 	logMsg("StartTCP", "TCP server running")
 
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			log.Printf("[TCP Listener.Accept]: Error: %v\n", err)
+			logError("StartTCP", err, "TCP Listener.Accept fail to accept")
 			continue
 		}
-		log.Printf("tcp server %s recv conn from %s \n", conn.LocalAddr().String(), conn.RemoteAddr().String())
+
+		logMsg("StartTCP", fmt.Sprintf("tcp server %s recv conn from %s \n", conn.LocalAddr().String(), conn.RemoteAddr().String()))
 
 		// Create a request handler
 		go n.handleConnection(conn)
@@ -131,6 +136,8 @@ func (n *Node) StartTCP() {
 
 func (n *Node) handleConnection(conn net.Conn) {
 	// extract the incoming message from the connection
+	logMsg("handleConnection", fmt.Sprintf("tcp server %s recv conn from %s \n", conn.LocalAddr().String(), conn.RemoteAddr().String()))
+
 	msg := ProtocolMessage{}
 	err := gob.NewDecoder(conn).Decode(&msg)
 	if err != nil {
@@ -141,7 +148,10 @@ func (n *Node) handleConnection(conn net.Conn) {
 	err = n.handleMessage(conn, msg)
 	if err != nil {
 		logError("handleConnection", err, fmt.Sprintf("Error when handling message from %s, message = %v", conn.RemoteAddr().String(), msg))
+		return
 	}
+
+	logMsg("handleConnection", fmt.Sprintf("Success: tcp server %s recv conn from %s \n", conn.LocalAddr().String(), conn.RemoteAddr().String()))
 }
 
 // A switch between handlers
@@ -317,6 +327,9 @@ func (n *Node) sendCreateProxyRequest(addr string, n3X DHKeyExchange) (*CreatePr
 // Only ACTION functions can directly call sendXXXRequest functions. All other functions suppose to call ACTION functions only.
 
 func (n *Node) QueryPath(addr string) (*QueryPathResp, []PathProfile, error) {
+
+	logMsg("QueryPath", fmt.Sprintf("Starts, Addr: %v", addr))
+
 	verifiedPaths := []PathProfile{}
 	resp, err := n.sendQueryPathRequest(addr)
 	if err == nil {
@@ -344,10 +357,16 @@ func (n *Node) QueryPath(addr string) (*QueryPathResp, []PathProfile, error) {
 			}
 		}
 	}
+
+	logMsg("QueryPath", fmt.Sprintf("Ends %v, Addr: %v", err, addr))
+
 	return resp, verifiedPaths, err
 }
 
 func (n *Node) ConnectPath(addr string, treeID uuid.UUID) (*ConnectPathResp, error) {
+
+	logMsg("ConnectPath", fmt.Sprintf("Starts, Addr: %v; TreeID: %v", addr, treeID))
+
 	// Generate Key Exchange Information on the fly
 	lenInByte := 32
 	myKeyExchangeSecret := RandomBigInt(lenInByte)
@@ -355,6 +374,7 @@ func (n *Node) ConnectPath(addr string, treeID uuid.UUID) (*ConnectPathResp, err
 
 	resp, connPtr, err := n.sendConnectPathRequest(addr, treeID, keyExchangeInfo)
 	if err != nil {
+		logMsg("ConnectPath", fmt.Sprintf("Ends, Addr: %v; TreeID: %v", addr, treeID))
 		return resp, err
 	}
 
@@ -362,6 +382,7 @@ func (n *Node) ConnectPath(addr string, treeID uuid.UUID) (*ConnectPathResp, err
 		// retrieve the half open path profile
 		halfOpenPathProfile, found := n.halfOpenPath.getValue(treeID)
 		if !found {
+			logMsg("ConnectPath", fmt.Sprintf("Ends, Addr: %v; TreeID: %v", addr, treeID))
 			return resp, errors.New("halfOpenPath not found")
 		}
 		// delete the half open path profile, as it is completely 'open'.
@@ -383,10 +404,15 @@ func (n *Node) ConnectPath(addr string, treeID uuid.UUID) (*ConnectPathResp, err
 		// Store a pointer to the opened tcp connection for later publish jobs
 		n.openConnections.setValue(treeID, *connPtr)
 	}
+
+	logMsg("ConnectPath", fmt.Sprintf("Ends, Addr: %v; TreeID: %v", addr, treeID))
 	return resp, nil
 }
 
 func (n *Node) CreateProxy(addr string) (*CreateProxyResp, error) {
+
+	logMsg("CreateProxy", fmt.Sprintf("Starts, Addr: %v", addr))
+
 	// Generate Key Exchange Information on the fly
 	lenInByte := 32
 	myKeyExchangeSecret := RandomBigInt(lenInByte)
@@ -394,12 +420,14 @@ func (n *Node) CreateProxy(addr string) (*CreateProxyResp, error) {
 
 	resp, connPtr, err := n.sendCreateProxyRequest(addr, keyExchangeInfo)
 	if err != nil {
+		logMsg("CreateProxy", fmt.Sprintf("Ends, Addr: %v", addr))
 		return resp, err
 	}
 
 	if resp.Status {
 		treeID, err := DecryptUUID(resp.EncryptedTreeUUID, n.privateKey)
 		if err != nil {
+			logMsg("CreateProxy", fmt.Sprintf("Ends, Addr: %v", addr))
 			return nil, errors.New("malformed encryptedTreeUUID")
 		}
 		// create new path profile
@@ -416,6 +444,9 @@ func (n *Node) CreateProxy(addr string) (*CreateProxyResp, error) {
 		// Start the sendCoverMessageWorker
 		go n.sendCoverMessageWorker(*connPtr, COVER_MESSAGE_SENDING_INTERVAL, treeID)
 	}
+
+	logMsg("CreateProxy", fmt.Sprintf("Ends, Addr: %v", addr))
+
 	return resp, nil
 }
 
@@ -423,6 +454,9 @@ func (n *Node) CreateProxy(addr string) (*CreateProxyResp, error) {
 
 // move up one step
 func (n *Node) MoveUp(pathID uuid.UUID) {
+
+	logMsg("MoveUp", fmt.Sprintf("Starts, Path: %v", pathID.String()))
+
 	value, ok := n.paths.getValue(pathID)
 	if ok {
 		originalNext := value.next
@@ -431,6 +465,8 @@ func (n *Node) MoveUp(pathID uuid.UUID) {
 		if originalNextNext == "ImmutableStorage" {
 			// next-next-hop is ImmutableStorage --> next-hop is proxy --> cannot move up, delete this blacklist path
 			n.paths.deleteValue(pathID)
+			logMsg("MoveUp", fmt.Sprintf("Ends, Path: %v", pathID.String()))
+
 			return
 		}
 		// 2) send verifyCover(originalNext) to originNextNext
@@ -438,6 +474,8 @@ func (n *Node) MoveUp(pathID uuid.UUID) {
 		if err != nil {
 			// next-next-hop is unreachable --> cannot move up, delete this blacklist path
 			n.paths.deleteValue(pathID)
+			logMsg("MoveUp", fmt.Sprintf("Ends, Path: %v", pathID.String()))
+
 			return
 		}
 		if resp.IsVerified {
@@ -445,6 +483,8 @@ func (n *Node) MoveUp(pathID uuid.UUID) {
 			resp, _ := n.ConnectPath(originalNextNext, pathID)
 			if resp.Status {
 				// if success, done
+				logMsg("MoveUp", fmt.Sprintf("Ends, Path: %v", pathID.String()))
+
 				return
 			}
 		}
@@ -468,6 +508,8 @@ func (n *Node) MoveUp(pathID uuid.UUID) {
 		n.paths.deleteValue(pathID)
 		n.paths.setValue(newPathProfile.uuid, newPathProfile)
 	}
+
+	logMsg("MoveUp", fmt.Sprintf("Ends, Path: %v", pathID.String()))
 }
 
 func (n *Node) getNextHalfOpenPath() (*PathProfile, error) {
@@ -488,15 +530,18 @@ func (n *Node) getNextHalfOpenPath() (*PathProfile, error) {
 
 // Tree Formation Process by aggregating QueryPath, CreateProxy, ConnectPath & joining cluster
 func (n *Node) fulfillPublishCondition() {
+
+	logMsg("fulfillPublishCondition", "Started")
+
 	// Get all cluster members IP
 	resp, err := n.ndClient.GetMembers()
 	if err != nil {
-		logError("fulfillPublishCondition", err, "Get Member Unknown Error")
+		logError("fulfillPublishCondition", err, "Get Member Error. Iteration Skip")
 		return
 	}
 	clusterSize := len(resp.Member)
 	if clusterSize <= 0 {
-		logMsg("fulfillPublishCondition", "Get Members return empty array. Skip Iteration")
+		logMsg("fulfillPublishCondition", "Get Members return empty array. Iteration Skip")
 		return
 	}
 	done := make(chan bool)
@@ -523,9 +568,11 @@ func (n *Node) fulfillPublishCondition() {
 		case <-done:
 			continue
 		case <-timeout:
+			logMsg("fulfillPublishCondition", "Iteration Timeout")
 			return
 		}
 	}
+	logMsg("fulfillPublishCondition", "Iteration Success")
 }
 
 // return the publishJobId, such that user can check if the message has been successfully published
@@ -726,7 +773,7 @@ func (n *Node) handleConnectPathReq(conn net.Conn, content *ConnectPathReq) erro
 		return err
 	}
 	// If everything works, start a worker handling all incoming Application Messages(Real and Cover) from this cover node.
-	go n.handleApplicationMessageWorker(conn, APPLICATION_MESSAGE_RECEIVING_INTERVAL)
+	go n.handleApplicationMessageWorker(conn)
 	return err
 }
 
