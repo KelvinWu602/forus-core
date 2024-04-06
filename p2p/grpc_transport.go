@@ -51,7 +51,7 @@ func (nc *NodeDiscoveryClient) GetMembers() (*ndProtos.GetMembersReponse, error)
 }
 
 func (ic *ImmutableStorageClient) New() error {
-	conn, err := grpc.Dial(IMMUTABLE_STORAGE_SERVER_LISTEN_PORT, grpc.WithInsecure(), grpc.WithBlock())
+	conn, err := grpc.Dial("localhost"+IMMUTABLE_STORAGE_SERVER_LISTEN_PORT, grpc.WithInsecure(), grpc.WithBlock())
 	if err != nil {
 		log.Printf("Cannot connect to Immutable Storage: %s \n", err)
 		return err
@@ -93,6 +93,7 @@ func initNodeDiscoverClient() *NodeDiscoveryClient {
 		time.Sleep(time.Second)
 		err = nd.New()
 	}
+	logMsg("initNodeDiscoverClient", "connected to Node-Discovery Successfully")
 	return nd
 }
 
@@ -105,5 +106,6 @@ func initImmutableStorageClient() *ImmutableStorageClient {
 		time.Sleep(time.Second)
 		err = is.New()
 	}
+	logMsg("initNodeDiscoverClient", "connected to Immutable-Storage Successfully")
 	return is
 }
