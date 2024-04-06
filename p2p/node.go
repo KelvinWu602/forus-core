@@ -30,9 +30,6 @@ type Node struct {
 	publicKey       []byte
 	privateKey      []byte
 
-	// ConnectPath Scheduler
-	pendingHalfOpenPaths chan uuid.UUID
-
 	// grpc member
 	ndClient *NodeDiscoveryClient
 	isClient *ImmutableStorageClient
@@ -74,8 +71,6 @@ func NewNode() *Node {
 		covers:          NewMutexMap[string, CoverNodeProfile](),
 		publishJobs:     NewMutexMap[uuid.UUID, PublishJobProfile](),
 		peerPublicKeys:  NewMutexMap[string, []byte](),
-
-		pendingHalfOpenPaths: make(chan uuid.UUID, 512),
 
 		ndClient: nil,
 		isClient: nil,
@@ -354,6 +349,7 @@ func (n *Node) QueryPath(addr string) (*QueryPathResp, []PathProfile, error) {
 			verifyCoverResp, err := n.sendVerifyCoverRequest(halfOpenPath.next2, halfOpenPath.next)
 			if err == nil && verifyCoverResp.IsVerified {
 				verifiedPaths = append(verifiedPaths, halfOpenPath)
+				n.halfOpenPath.setValue(pathID, halfOpenPath)
 			}
 		}
 	}
@@ -510,22 +506,6 @@ func (n *Node) MoveUp(pathID uuid.UUID) {
 	}
 
 	logMsg("MoveUp", fmt.Sprintf("Ends, Path: %v", pathID.String()))
-}
-
-func (n *Node) getNextHalfOpenPath() (*PathProfile, error) {
-	var result PathProfile
-	var found bool
-	alreadyConnected := true
-	for alreadyConnected {
-		halfOpenPathID := <-n.pendingHalfOpenPaths
-		result, found = n.halfOpenPath.getValue(halfOpenPathID)
-		_, alreadyConnected = n.paths.getValue(halfOpenPathID)
-	}
-	if found && !alreadyConnected {
-		return &result, nil
-	} else {
-		return nil, errors.New("half open path not found")
-	}
 }
 
 // Tree Formation Process by aggregating QueryPath, CreateProxy, ConnectPath & joining cluster
@@ -1020,5 +1000,5 @@ func (n *Node) handleGetPublishJobStatus(w http.ResponseWriter, req *http.Reques
 	w.WriteHeader(http.StatusOK)
 	// return a json that state which
 	json.NewEncoder(w).Encode(publishJob)
-	return
+
 }
