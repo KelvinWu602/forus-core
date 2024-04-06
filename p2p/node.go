@@ -156,20 +156,24 @@ func (n *Node) handleMessage(conn net.Conn, msg ProtocolMessage) error {
 
 	switch msg.Type {
 	case QueryPathRequest:
-		if req, castSuccess := msg.Content.(QueryPathReq); castSuccess {
+		req := QueryPathReq{}
+		if gob.NewDecoder(bytes.NewBuffer(msg.Content)).Decode(&req) == nil {
 			return n.handleQueryPathReq(conn, &req)
 		}
 	case VerifyCoverRequest:
-		if req, castSuccess := msg.Content.(VerifyCoverReq); castSuccess {
+		req := VerifyCoverReq{}
+		if gob.NewDecoder(bytes.NewBuffer(msg.Content)).Decode(&req) == nil {
 			return n.handleVerifyCoverReq(conn, &req)
 		}
 	case ConnectPathRequest:
-		if req, castSuccess := msg.Content.(ConnectPathReq); castSuccess {
+		req := ConnectPathReq{}
+		if gob.NewDecoder(bytes.NewBuffer(msg.Content)).Decode(&req) == nil {
 			return n.handleConnectPathReq(conn, &req)
 		}
 
 	case CreateProxyRequest:
-		if req, castSuccess := msg.Content.(CreateProxyReq); castSuccess {
+		req := CreateProxyReq{}
+		if gob.NewDecoder(bytes.NewBuffer(msg.Content)).Decode(&req) == nil {
 			return n.handleCreateProxyReq(conn, &req)
 		}
 	}
@@ -187,7 +191,6 @@ func initGobTypeRegistration() {
 	gob.Register(&VerifyCoverReq{})
 	gob.Register(&VerifyCoverResp{})
 	gob.Register(&ConnectPathResp{})
-	gob.Register(&DHKeyExchange{})
 	gob.Register(&CreateProxyResp{})
 	gob.Register(&ProtocolMessage{})
 	gob.Register(&ApplicationMessage{})
@@ -254,22 +257,30 @@ func waitForResponse[RESPONSE_TYPE any](conn net.Conn) (*RESPONSE_TYPE, error) {
 // sendDeleteCoverRequest
 
 func (n *Node) sendQueryPathRequest(addr string) (*QueryPathResp, error) {
+	serialized, err := gobEncodeToBytes(QueryPathReq{
+		PublicKey: n.publicKey,
+	})
+	if err != nil {
+		return nil, errGobEncodeMsg
+	}
 	queryPathRequest := ProtocolMessage{
-		Type: QueryPathRequest,
-		Content: QueryPathReq{
-			PublicKey: n.publicKey,
-		},
+		Type:    QueryPathRequest,
+		Content: serialized,
 	}
 	resp, _, err := tcpSendAndWaitResponse[QueryPathResp](&queryPathRequest, addr, false)
 	return resp, err
 }
 
 func (n *Node) sendVerifyCoverRequest(addr string, coverToBeVerified string) (*VerifyCoverResp, error) {
+	serialized, err := gobEncodeToBytes(VerifyCoverReq{
+		NextHop: coverToBeVerified,
+	})
+	if err != nil {
+		return nil, errGobEncodeMsg
+	}
 	verifyCoverRequest := ProtocolMessage{
-		Type: VerifyCoverRequest,
-		Content: VerifyCoverReq{
-			NextHop: coverToBeVerified,
-		},
+		Type:    VerifyCoverRequest,
+		Content: serialized,
 	}
 	resp, _, err := tcpSendAndWaitResponse[VerifyCoverResp](&verifyCoverRequest, addr, false)
 	return resp, err
@@ -286,12 +297,17 @@ func (n *Node) sendConnectPathRequest(addr string, treeID uuid.UUID, n3X DHKeyEx
 		return nil, nil, err
 	}
 
+	serialized, err := gobEncodeToBytes(ConnectPathReq{
+		EncryptedTreeUUID: encryptedTreeUUID,
+		KeyExchange:       n3X,
+	})
+	if err != nil {
+		return nil, nil, errGobEncodeMsg
+	}
+
 	connectPathReq := ProtocolMessage{
-		Type: ConnectPathRequest,
-		Content: ConnectPathReq{
-			EncryptedTreeUUID: encryptedTreeUUID,
-			KeyExchange:       n3X,
-		},
+		Type:    ConnectPathRequest,
+		Content: serialized,
 	}
 
 	return tcpSendAndWaitResponse[ConnectPathResp](&connectPathReq, addr, true)
@@ -299,12 +315,16 @@ func (n *Node) sendConnectPathRequest(addr string, treeID uuid.UUID, n3X DHKeyEx
 
 // request a proxy triggered by empty path in pathResp
 func (n *Node) sendCreateProxyRequest(addr string, n3X DHKeyExchange) (*CreateProxyResp, *net.Conn, error) {
+	serialized, err := gobEncodeToBytes(CreateProxyReq{
+		KeyExchange: n3X,
+		PublicKey:   n.publicKey,
+	})
+	if err != nil {
+		return nil, nil, errGobEncodeMsg
+	}
 	createProxyRequest := ProtocolMessage{
-		Type: CreateProxyRequest,
-		Content: CreateProxyReq{
-			KeyExchange: n3X,
-			PublicKey:   n.publicKey,
-		},
+		Type:    CreateProxyRequest,
+		Content: serialized,
 	}
 
 	return tcpSendAndWaitResponse[CreateProxyResp](&createProxyRequest, addr, true)
@@ -676,12 +696,8 @@ func (n *Node) handleQueryPathReq(conn net.Conn, content *QueryPathReq) error {
 			})
 		}, true)
 	}
-	protocolMessage := ProtocolMessage{
-		Type:    QueryPathResponse,
-		Content: queryPathResp,
-	}
-	enc := gob.NewEncoder(conn)
-	err := enc.Encode(protocolMessage)
+
+	err := gob.NewEncoder(conn).Encode(queryPathResp)
 	if err != nil {
 		logProtocolMessageHandlerError("handleQueryPathReq", conn, err, content)
 	}
@@ -707,7 +723,7 @@ func (n *Node) handleConnectPathReq(conn net.Conn, content *ConnectPathReq) erro
 	// check number of cover nodes
 	shouldAcceptConnection := n.covers.getSize() < MAXIMUM_NUMBER_OF_COVER_NODES
 
-	var connectPathResponse ProtocolMessage
+	var connectPathResponse ConnectPathResp
 
 	if shouldAcceptConnection {
 		requestedPath, err := DecryptUUID(content.EncryptedTreeUUID, n.privateKey)
@@ -731,20 +747,14 @@ func (n *Node) handleConnectPathReq(conn net.Conn, content *ConnectPathReq) erro
 			treeUUID:  requestedPath,
 		})
 
-		connectPathResponse = ProtocolMessage{
-			Type: ConnectPathResponse,
-			Content: ConnectPathResp{
-				Status:      true,
-				KeyExchange: myKeyExchangeInfo,
-			},
+		connectPathResponse = ConnectPathResp{
+			Status:      true,
+			KeyExchange: myKeyExchangeInfo,
 		}
 	} else {
-		connectPathResponse = ProtocolMessage{
-			Type: ConnectPathResponse,
-			Content: ConnectPathResp{
-				Status:      false,
-				KeyExchange: DHKeyExchange{},
-			},
+		connectPathResponse = ConnectPathResp{
+			Status:      false,
+			KeyExchange: DHKeyExchange{},
 		}
 	}
 	err := gob.NewEncoder(conn).Encode(connectPathResponse)
@@ -761,7 +771,7 @@ func (n *Node) handleCreateProxyReq(conn net.Conn, content *CreateProxyReq) erro
 	// check number of cover nodes
 	shouldAcceptConnection := n.covers.getSize() < MAXIMUM_NUMBER_OF_COVER_NODES
 
-	var createProxyResponse ProtocolMessage
+	var createProxyResponse CreateProxyResp
 
 	if shouldAcceptConnection {
 
@@ -795,24 +805,18 @@ func (n *Node) handleCreateProxyReq(conn net.Conn, content *CreateProxyReq) erro
 			return err
 		}
 
-		createProxyResponse = ProtocolMessage{
-			Type: CreateProxyRequest,
-			Content: CreateProxyResp{
-				Status:            true,
-				KeyExchange:       myKeyExchangeInfo,
-				Public:            n.publicKey,
-				EncryptedTreeUUID: encryptedPathID,
-			},
+		createProxyResponse = CreateProxyResp{
+			Status:            true,
+			KeyExchange:       myKeyExchangeInfo,
+			Public:            n.publicKey,
+			EncryptedTreeUUID: encryptedPathID,
 		}
 	} else {
-		createProxyResponse = ProtocolMessage{
-			Type: CreateProxyRequest,
-			Content: CreateProxyResp{
-				Status:            false,
-				KeyExchange:       DHKeyExchange{},
-				Public:            []byte{},
-				EncryptedTreeUUID: []byte{},
-			},
+		createProxyResponse = CreateProxyResp{
+			Status:            false,
+			KeyExchange:       DHKeyExchange{},
+			Public:            []byte{},
+			EncryptedTreeUUID: []byte{},
 		}
 	}
 

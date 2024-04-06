@@ -75,9 +75,9 @@ func AsymmetricDecrypt(input []byte, privInBytes []byte) ([]byte, error) {
 // G, P, HalfKey are all safe to leak to middle man.
 // But mySecret must be kept to the node only and never exposed to anyone.
 type DHKeyExchange struct {
-	G       big.Int
-	P       big.Int
-	HalfKey big.Int
+	G       *big.Int
+	P       *big.Int
+	HalfKey *big.Int
 }
 
 // 32 bytes
@@ -110,9 +110,9 @@ func NewKeyExchange(mySecret big.Int) DHKeyExchange {
 	}
 
 	return DHKeyExchange{
-		G:       *g,
-		P:       *p,
-		HalfKey: *big.NewInt(0).Exp(g, &mySecret, p),
+		G:       g,
+		P:       p,
+		HalfKey: big.NewInt(0).Exp(g, &mySecret, p),
 	}
 }
 
@@ -122,12 +122,12 @@ func (dh *DHKeyExchange) GenerateReturn(mySecret big.Int) DHKeyExchange {
 	return DHKeyExchange{
 		G:       dh.G,
 		P:       dh.P,
-		HalfKey: *big.NewInt(0).Exp(&dh.G, &mySecret, &dh.P),
+		HalfKey: big.NewInt(0).Exp(dh.G, &mySecret, dh.P),
 	}
 }
 
 func (dh *DHKeyExchange) GetSymKey(mySecret big.Int) big.Int {
-	return *big.NewInt(0).Exp(&dh.HalfKey, &mySecret, &dh.P)
+	return *big.NewInt(0).Exp(dh.HalfKey, &mySecret, dh.P)
 }
 
 // The symKey is assumed to be 32 bytes

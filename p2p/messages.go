@@ -1,7 +1,10 @@
 package p2p
 
 import (
+	"bytes"
+	"encoding/gob"
 	"errors"
+	"fmt"
 
 	"github.com/KelvinWu602/immutable-storage/blueprint"
 )
@@ -30,6 +33,8 @@ const (
 	Real DataMessageType = iota
 	Cover
 )
+
+var errGobEncodeMsg = errors.New("failed to encode message using gob")
 
 // ******************
 // Application Messages
@@ -65,7 +70,7 @@ type DataMessage struct {
 // ProtocolMessage is the messages being sent to other nodes during the tree formation process.
 type ProtocolMessage struct {
 	Type    ProtocolMessageType
-	Content any
+	Content []byte
 }
 
 type QueryPathReq struct {
@@ -119,6 +124,16 @@ type CreateProxyResp struct {
 	KeyExchange       DHKeyExchange
 	Public            []byte
 	EncryptedTreeUUID []byte
+}
+
+func gobEncodeToBytes[T any](req T) ([]byte, error) {
+	buffer := bytes.NewBuffer([]byte{})
+	err := gob.NewEncoder(buffer).Encode(req)
+	if err != nil {
+		logError("gobEncodeToBytes", err, fmt.Sprintf("input = %v\n", req))
+		return nil, err
+	}
+	return buffer.Bytes(), nil
 }
 
 func CastProtocolMessage[output any](raw any, targetType ProtocolMessageType) (*output, error) {
