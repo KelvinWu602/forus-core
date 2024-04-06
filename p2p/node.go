@@ -2,8 +2,8 @@ package p2p
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/gob"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -15,7 +15,9 @@ import (
 	"os/signal"
 	"time"
 
+	"github.com/KelvinWu602/immutable-storage/blueprint"
 	is "github.com/KelvinWu602/immutable-storage/blueprint"
+	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
 
@@ -93,13 +95,25 @@ func (n *Node) initDependencies() {
 func (n *Node) StartHTTP() {
 	// Start HTTP server for web client
 	logMsg("StartHTTP", "setting up HTTP server at localhost"+HTTP_SERVER_LISTEN_PORT)
-	hs := NewHTTPTransport(HTTP_SERVER_LISTEN_PORT)
+	router := gin.Default()
 
-	hs.mux.HandleFunc("/message", n.handlerMessage)
-	hs.mux.HandleFunc("/publish-job", n.handleGetPublishJobStatus)
+	router.GET("/message/:key", n.handleGetMessage)
+	router.POST("/message/:key", n.handlePostMessage)
 
-	go hs.StartServer()
+	router.GET("/path/:id", n.handleGetPath)
+	router.GET("/paths", n.handleGetPaths)
+	router.POST("/path", n.handlePostPath)
 
+	router.GET("/publish-job/:id", n.handleGetPublishJob)
+
+	router.GET("/members", n.handleGetMembers)
+
+	router.GET("/cover/:ip", n.handleGetCover)
+	router.GET("/covers", n.handleGetCovers)
+
+	router.GET("/key-pair", n.handleGetKeyPair)
+
+	go router.Run("localhost" + HTTP_SERVER_LISTEN_PORT)
 	logMsg("StartHTTP", "HTTP server running")
 }
 
@@ -576,7 +590,7 @@ func (n *Node) fulfillPublishCondition() {
 }
 
 // return the publishJobId, such that user can check if the message has been successfully published
-func (n *Node) Publish(key is.Key, message []byte) (uuid.UUID, error) {
+func (n *Node) Publish(key is.Key, message []byte, targetPathId uuid.UUID) (uuid.UUID, error) {
 	// 1) Check tree formation status
 	// a) the node has connected to at least one path
 	// b) has at least k cover nodes
@@ -596,12 +610,23 @@ func (n *Node) Publish(key is.Key, message []byte) (uuid.UUID, error) {
 		return uuid.Nil, errors.New("key not valid")
 	}
 	// 3) Pick a path
-	pathID, randomPathProfile := pick(n.paths.data, nil)
+	var pathID uuid.UUID
+	var pathProfile PathProfile
+	var found bool
+	if targetPathId == uuid.Nil {
+		pathID, pathProfile = pick(n.paths.data, nil)
+	} else {
+		pathID = targetPathId
+		pathProfile, found = n.paths.getValue(targetPathId)
+		if !found {
+			return uuid.Nil, errors.New("targetPathId does not exist")
+		}
+	}
 	conn, _ := n.openConnections.getValue(pathID)
 
 	// 4) encrypt the data message to application message
 	dataMessage := DataMessage{Key: key, Content: message}
-	am, err := NewRealMessage(dataMessage, randomPathProfile.proxyPublic, randomPathProfile.symKey)
+	am, err := NewRealMessage(dataMessage, pathProfile.proxyPublic, pathProfile.symKey)
 	if err != nil {
 		return uuid.Nil, errors.New("encryption from data to application failed")
 	}
@@ -614,7 +639,7 @@ func (n *Node) Publish(key is.Key, message []byte) (uuid.UUID, error) {
 
 	// 6) update the publishingJob map
 	newJobID := uuid.New()
-	n.publishJobs.setValue(newJobID, PublishJobProfile{Key: key[:], Status: PENDING, OnPath: randomPathProfile.uuid})
+	n.publishJobs.setValue(newJobID, PublishJobProfile{Key: key[:], Status: PENDING, OnPath: pathProfile.uuid})
 
 	// 7) initiate checkPublishJobStatusWorker()
 	go n.checkPublishJobStatusWorker(newJobID)
@@ -902,107 +927,284 @@ func (n *Node) handleRealMessage(asymOutput []byte) error {
 
 // DONE(@SauDoge)
 
-func (n *Node) handlerMessage(w http.ResponseWriter, req *http.Request) {
-	switch req.Method {
-	case http.MethodGet:
-		n.handleGetMessage(w, req)
-		return
-	case http.MethodPost:
-		n.handlePostMessage(w, req)
-		return
-	}
-	w.WriteHeader(http.StatusMethodNotAllowed)
-	w.Write([]byte("only accept GET and POST"))
-}
-
-func (n *Node) handleGetMessage(w http.ResponseWriter, req *http.Request) {
-	// 0) If the queryString is in the wrong format, REJECT
-	query := req.URL.Query()
-	keys := query["keys"]
-	if len(keys) == 0 || keys == nil {
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("The keys are empty"))
-		return
-	} else {
-		keyContentPair := make(map[string]string)
-		for _, v := range keys {
-			// 1) Call IS IsDiscovered
-			resp, err := n.isClient.Read([]byte(v))
-			if err != nil {
-				log.Printf("No such message exist: %s \n", err)
-				continue
-			}
-
-			if resp.Content != nil {
-				// 2) If message exists in IS, return to request
-				keyContentPair[v] = string(resp.Content)
-			} else {
-				// 3) If message does not exist, return ???
-				keyContentPair[v] = ""
-			}
-
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		// return a json that state which
-		json.NewEncoder(w).Encode(keyContentPair)
-		return
-	}
-
-}
-
-func (n *Node) handlePostMessage(w http.ResponseWriter, req *http.Request) {
-	decoder := json.NewDecoder(req.Body)
-	var message DataMessage
-	err := decoder.Decode(&message)
+func (n *Node) handleGetMessage(c *gin.Context) {
+	// read path param
+	keyBase64 := c.Param("key")
+	key, err := base64.StdEncoding.DecodeString(keyBase64)
 	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("Request Body not formatted correctly \n"))
-	} else {
-		// 1) call Publish()
-		publishJobID, err := n.Publish(message.Key, message.Content)
+		c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "key should be base64 encoded string"})
+		return
+	}
+	if len(key) != 48 {
+		c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "key length is not 48 bytes"})
+		return
+	}
+	// operation
+	resp, err := n.isClient.Read(key)
+	if err != nil {
+		c.IndentedJSON(http.StatusNotFound, gin.H{"message": "message not found", "error": err})
+		return
+	}
+	// response
+	c.IndentedJSON(http.StatusOK, HTTPSchemaMessage{
+		Content: resp.Content,
+	})
+}
 
+func (n *Node) handlePostMessage(c *gin.Context) {
+	// read path param
+	keyBase64 := c.Param("key")
+	key, err := base64.StdEncoding.DecodeString(keyBase64)
+	if err != nil {
+		c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "key should be base64 encoded string"})
+		return
+	}
+	if len(key) != 48 {
+		c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "key length is not 48 bytes"})
+		return
+	}
+	// read body param
+	var body HTTPPostMessageReq
+	if err := c.BindJSON(&body); err != nil {
+		c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "request body is invalid", "error": err})
+		return
+	}
+	if body.Content == nil || len(body.Content) == 0 {
+		c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "content is invalid"})
+		return
+	}
+	pathSpecified := body.PathID != uuid.Nil
+	var publishJobId uuid.UUID
+	if pathSpecified {
+		// use the specified path to publish message
+		_, found := n.paths.getValue(body.PathID)
+		if !found {
+			c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "path is not found"})
+			return
+		}
+		publishJobId, err = n.Publish(blueprint.Key(key), body.Content, body.PathID)
 		if err != nil {
-			// 3) If forward failed, return failed
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte("Posting failed on backend. Please try again. \n"))
-		} else {
-			// 2) If forward successful, return success and the publishingJobID
-			w.WriteHeader(http.StatusOK)
-			w.Write(publishJobID[:])
+			c.IndentedJSON(http.StatusInternalServerError, gin.H{"message": "publish error", "error": err})
+			return
+		}
+	} else {
+		publishJobId, err = n.Publish(blueprint.Key(key), body.Content, uuid.Nil)
+		if err != nil {
+			c.IndentedJSON(http.StatusInternalServerError, gin.H{"message": "publish error", "error": err})
+			return
 		}
 	}
+	c.IndentedJSON(http.StatusCreated, HTTPSchemaPublishJobID{
+		ID: publishJobId,
+	})
 }
 
-func (n *Node) handleGetPublishJobStatus(w http.ResponseWriter, req *http.Request) {
-	if req.Method != http.MethodGet {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		w.Write([]byte("Only allow GET request"))
-		return
-	}
-	// 0) If the queryString is in the wrong format, REJECT
-	query := req.URL.Query()
-	id := query.Get("id")
-	if id == "" {
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("The id is empty"))
-		return
-	}
-	jobId, err := uuid.Parse(id)
+func (n *Node) handleGetPath(c *gin.Context) {
+	// read path param
+	pathIDStr := c.Param("id")
+	pathID, err := uuid.Parse(pathIDStr)
 	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("The id is not a valid uuid"))
+		c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "id should be uuid"})
 		return
 	}
-	publishJob, found := n.publishJobs.getValue(jobId)
+	// operation
+	path, found := n.paths.getValue(pathID)
 	if !found {
-		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte("The requested publishJob is not found"))
+		c.IndentedJSON(http.StatusNotFound, gin.H{"message": "path not found"})
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	// return a json that state which
-	json.NewEncoder(w).Encode(publishJob)
+	symKeyInByte, err := path.symKey.MarshalJSON()
+	if err != nil {
+		c.IndentedJSON(http.StatusInternalServerError, gin.H{"message": "failed to marshal symmetric_key", "error": err})
+		return
+	}
+	// response
+	c.IndentedJSON(http.StatusOK, HTTPSchemaPath{
+		Id:                 path.uuid,
+		Next:               path.next,
+		Next2:              path.next2,
+		ProxyPublicKey:     path.proxyPublic,
+		SymmetricKeyInByte: symKeyInByte,
+		Analytics: HTTPSchemaPathAnalytics{
+			SuccessCount: path.successCount,
+			FailureCount: path.failureCount,
+		},
+	})
+}
 
+func (n *Node) handleGetPaths(c *gin.Context) {
+	// operation
+	result := []HTTPSchemaPath{}
+	n.paths.iterate(func(pathID uuid.UUID, path PathProfile) {
+		symKeyInByte, err := path.symKey.MarshalJSON()
+		if err != nil {
+			// skip any path with error occured
+			return
+		}
+		result = append(result, HTTPSchemaPath{
+			Id:                 path.uuid,
+			Next:               path.next,
+			Next2:              path.next2,
+			ProxyPublicKey:     path.proxyPublic,
+			SymmetricKeyInByte: symKeyInByte,
+			Analytics: HTTPSchemaPathAnalytics{
+				SuccessCount: path.successCount,
+				FailureCount: path.failureCount,
+			},
+		})
+	}, true)
+
+	// response
+	c.IndentedJSON(http.StatusOK, result)
+}
+
+func (n *Node) handlePostPath(c *gin.Context) {
+	// read body param
+	var body HTTPPostPathReq
+	if err := c.BindJSON(&body); err != nil {
+		c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "request body is invalid", "error": err})
+		return
+	}
+	// operation
+	var resultPathId uuid.UUID
+	if len(body.IP) > 0 && body.PathID != uuid.Nil {
+		// Connect Path
+		addr := body.IP + TCP_SERVER_LISTEN_PORT
+		resp, err := n.ConnectPath(addr, body.PathID)
+		if err != nil {
+			c.IndentedJSON(http.StatusInternalServerError, gin.H{"message": "connect path error", "error": err})
+			return
+		}
+		if !resp.Status {
+			c.IndentedJSON(http.StatusInternalServerError, gin.H{"message": "target node deny"})
+			return
+		}
+		resultPathId = body.PathID
+	} else if len(body.IP) == 0 && body.PathID == uuid.Nil {
+		// Become Proxy
+		newPathID, _ := uuid.NewUUID()
+		n.paths.setValue(newPathID, PathProfile{
+			uuid:        newPathID,
+			next:        "ImmutableStorage", // Use a value tag to reflect that the next hop is ImmutableStorage
+			next2:       "",                 // There is no next-next hop
+			symKey:      *big.NewInt(0),     // dummy value
+			proxyPublic: n.publicKey,
+		})
+		resultPathId = newPathID
+	} else {
+		c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "request body is invalid"})
+		return
+	}
+	path, found := n.paths.getValue(resultPathId)
+	if !found {
+		c.IndentedJSON(http.StatusInternalServerError, gin.H{"message": "path created but immediately removed", "new_path_id": resultPathId})
+		return
+	}
+	symKeyInByte, err := path.symKey.MarshalJSON()
+	if err != nil {
+		c.IndentedJSON(http.StatusInternalServerError, gin.H{"message": "failed to marshal symmetric_key", "error": err})
+		return
+	}
+	// response
+	c.IndentedJSON(http.StatusOK, HTTPSchemaPath{
+		Id:                 path.uuid,
+		Next:               path.next,
+		Next2:              path.next2,
+		ProxyPublicKey:     path.proxyPublic,
+		SymmetricKeyInByte: symKeyInByte,
+		Analytics: HTTPSchemaPathAnalytics{
+			SuccessCount: path.successCount,
+			FailureCount: path.failureCount,
+		},
+	})
+}
+
+func (n *Node) handleGetPublishJob(c *gin.Context) {
+	// read path param
+	publishJobIDStr := c.Param("id")
+	publishJobID, err := uuid.Parse(publishJobIDStr)
+	if err != nil {
+		c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "id should be uuid"})
+		return
+	}
+	// operation
+	job, found := n.publishJobs.getValue(publishJobID)
+	if !found {
+		c.IndentedJSON(http.StatusNotFound, gin.H{"message": "publish job not found"})
+		return
+	}
+	// response
+	var status string
+	switch job.Status {
+	case SUCCESS:
+		status = "success"
+	case PENDING:
+		status = "pending"
+	case TIMEOUT:
+		status = "timeout"
+	}
+	c.IndentedJSON(http.StatusOK, HTTPSchemaPublishJob{
+		Key:     job.Key,
+		Status:  status,
+		ViaPath: job.OnPath,
+	})
+}
+
+func (n *Node) handleGetMembers(c *gin.Context) {
+	// operation
+	resp, err := n.ndClient.GetMembers()
+	if err != nil {
+		c.IndentedJSON(http.StatusInternalServerError, gin.H{"message": "node-discovery get members error", "error": err})
+		return
+	}
+	c.IndentedJSON(http.StatusOK, resp.Member)
+}
+
+func (n *Node) handleGetCover(c *gin.Context) {
+	// read path param
+	coverIP := c.Param("ip")
+	if len(coverIP) == 0 {
+		c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "ip should be string"})
+		return
+	}
+	// operation
+	cover, found := n.covers.getValue(coverIP)
+	if !found {
+		c.IndentedJSON(http.StatusNotFound, gin.H{"message": "cover not found"})
+		return
+	}
+	// response
+	symKeyInByte, err := cover.secretKey.MarshalJSON()
+	if err != nil {
+		c.IndentedJSON(http.StatusInternalServerError, gin.H{"message": "failed to marshal symmetric_key", "error": err})
+		return
+	}
+	c.IndentedJSON(http.StatusOK, HTTPSchemaCoverNode{
+		SymmetricKeyInByte: symKeyInByte,
+		ConnectedPathId:    cover.treeUUID,
+	})
+}
+
+func (n *Node) handleGetCovers(c *gin.Context) {
+	// operation
+	result := []HTTPSchemaCoverNode{}
+	n.covers.iterate(func(coverIP string, cover CoverNodeProfile) {
+		symKeyInByte, err := cover.secretKey.MarshalJSON()
+		if err != nil {
+			// skip any path with error occured
+			return
+		}
+		result = append(result, HTTPSchemaCoverNode{
+			SymmetricKeyInByte: symKeyInByte,
+			ConnectedPathId:    cover.treeUUID,
+		})
+	}, true)
+
+	// response
+	c.IndentedJSON(http.StatusOK, result)
+}
+
+func (n *Node) handleGetKeyPair(c *gin.Context) {
+	// response
+	c.IndentedJSON(http.StatusOK, gin.H{"public_key": n.publicKey, "private_key": n.privateKey})
 }
