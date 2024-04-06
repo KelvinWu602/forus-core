@@ -25,7 +25,7 @@ func (nc *NodeDiscoveryClient) New() error {
 	addr := "localhost" + NODE_DISCOVERY_SERVER_LISTEN_PORT
 	conn, err := grpc.Dial(addr, grpc.WithInsecure(), grpc.WithBlock())
 	if err != nil {
-		log.Fatalf("Cannot connect to Node Discovery: %s \n", err)
+		log.Printf("Cannot connect to Node Discovery: %s \n", err)
 		return err
 	}
 	nc.client = ndProtos.NewNodeDiscoveryClient(conn)
@@ -53,7 +53,7 @@ func (nc *NodeDiscoveryClient) GetMembers() (*ndProtos.GetMembersReponse, error)
 func (ic *ImmutableStorageClient) New() error {
 	conn, err := grpc.Dial(IMMUTABLE_STORAGE_SERVER_LISTEN_PORT, grpc.WithInsecure(), grpc.WithBlock())
 	if err != nil {
-		log.Fatalf("Cannot connect to Immutable Storage: %s \n", err)
+		log.Printf("Cannot connect to Immutable Storage: %s \n", err)
 		return err
 	}
 	ic.client = isProtos.NewImmutableStorageClient(conn)
