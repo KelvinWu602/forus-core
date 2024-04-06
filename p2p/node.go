@@ -11,6 +11,8 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"os"
+	"os/signal"
 	"time"
 
 	is "github.com/KelvinWu602/immutable-storage/blueprint"
@@ -46,6 +48,11 @@ func StartNode() {
 
 	go node.checkPublishConditionWorker()
 	go node.maintainPathsHealthWorker()
+
+	terminate := make(chan os.Signal, 1)
+	signal.Notify(terminate, os.Interrupt)
+	// wait for the SIGINT signal (Ctrl+C)
+	<-terminate
 }
 
 // New() creates a new node
@@ -105,7 +112,7 @@ func (n *Node) StartTCP() {
 	logMsg("StartTCP", "setting up TCP server at"+TCP_SERVER_LISTEN_PORT)
 	listener, err := net.Listen("tcp", TCP_SERVER_LISTEN_PORT)
 	if err != nil {
-		log.Fatalf("failed to listen: %s \n", err)
+		log.Printf("failed to listen: %s \n", err)
 	}
 	logMsg("StartTCP", "TCP server running")
 
@@ -887,7 +894,7 @@ func (n *Node) handleGetMessage(w http.ResponseWriter, req *http.Request) {
 			// 1) Call IS IsDiscovered
 			resp, err := n.isClient.Read([]byte(v))
 			if err != nil {
-				log.Fatalf("No such message exist: %s \n", err)
+				log.Printf("No such message exist: %s \n", err)
 				continue
 			}
 
