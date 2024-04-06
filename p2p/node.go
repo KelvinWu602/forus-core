@@ -491,10 +491,14 @@ func (n *Node) fulfillPublishCondition() {
 	// Get all cluster members IP
 	resp, err := n.ndClient.GetMembers()
 	if err != nil {
-		log.Printf("[fulfillPublishCondition]:Error:%v\n", err)
+		logError("fulfillPublishCondition", err, "Get Member Unknown Error")
 		return
 	}
 	clusterSize := len(resp.Member)
+	if clusterSize <= 0 {
+		logMsg("fulfillPublishCondition", "Get Members return empty array. Skip Iteration")
+		return
+	}
 	done := make(chan bool)
 
 	timeout := time.After(FULFILL_PUBLISH_CONDITION_TIMEOUT)
