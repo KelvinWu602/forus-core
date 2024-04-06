@@ -15,7 +15,6 @@ import (
 	"os/signal"
 	"time"
 
-	"github.com/KelvinWu602/immutable-storage/blueprint"
 	is "github.com/KelvinWu602/immutable-storage/blueprint"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -982,13 +981,13 @@ func (n *Node) handlePostMessage(c *gin.Context) {
 			c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "path is not found"})
 			return
 		}
-		publishJobId, err = n.Publish(blueprint.Key(key), body.Content, body.PathID)
+		publishJobId, err = n.Publish(is.Key(key), body.Content, body.PathID)
 		if err != nil {
 			c.IndentedJSON(http.StatusInternalServerError, gin.H{"message": "publish error", "error": err})
 			return
 		}
 	} else {
-		publishJobId, err = n.Publish(blueprint.Key(key), body.Content, uuid.Nil)
+		publishJobId, err = n.Publish(is.Key(key), body.Content, uuid.Nil)
 		if err != nil {
 			c.IndentedJSON(http.StatusInternalServerError, gin.H{"message": "publish error", "error": err})
 			return
