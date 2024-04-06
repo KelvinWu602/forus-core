@@ -1,0 +1,222 @@
+swagger: "2.0"
+info:
+  title: Forus Core API
+  description: Follow this or you get bug 
+  version: 1.0.0
+host: localhost:3000
+schemes:
+  - http
+paths:
+  /message/{key}:
+    get:
+      summary: Returns the byte array of a published message content by base64 encoded key string
+      parameters:
+	      - in: path
+		      name: key
+		      required: true
+		      type: string
+		      description: message key in base64 encoded string format
+      responses:
+        200:
+          description: OK
+          schema:
+            $ref: '#/components/schemas/Message'
+			  404:
+          description: Not Found
+    post:
+      summary: Publish a message and return the publishJob id
+      parameters:
+	      - in: path
+		      name: key
+		      required: true
+		      type: string
+		      description: message key in base64 encoded string format
+		    - in: body
+		      name: content
+		      required: true
+		      type: string
+		      description: message content in base64 encoded string format
+		    - in: body
+			    name: path_id
+				  required: false
+				  type: string
+		      description: path uuid that this publish job will use, optional
+      responses:
+        201:
+          description: Created
+          schema:
+	          type: object
+	          properties:
+		          publish_job_id:
+			          type: string
+			          description: publish job uuid
+  /path/{id}:
+    get:
+      summary: Returns an opened paths on this node
+      parameters:
+	      - in: path
+		      name: id
+		      required: true
+		      type: string
+		      description: path uuid
+      responses:
+        200:
+          description: OK
+          schema:
+            $ref: '#/components/schemas/Path'                        
+			  404:
+          description: Not Found
+  /path:
+    get:
+      summary: Returns an array of all opened paths on this node
+      responses:
+        200:
+          description: OK
+          schema:
+	          type: array
+            items:
+              schema:
+                $ref: '#/components/schemas/Message'
+    post:
+      summary: Add one local proxy path if request body is empty, otherwise, connect to the specified path.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - type: object
+                  properties:
+                    ip:
+                      type: string
+                    path_id:
+                      type: string
+                - type: object
+                  properties:
+      responses:
+        201:
+          description: Created
+          schema:
+            $ref: '#/components/schemas/Path'                        
+        404:
+          description: Not Found, when the ip is not reachable, or the path id does not exists in the half open path cache.
+  /publish-job/{id}:
+    get:
+      summary: Returns a publish job by publish job id
+      parameters:
+	      - in: path
+		      name: id
+		      required: true
+		      type: string
+		      description: path uuid
+      responses:
+        200:
+          description: OK
+          schema:
+            $ref: '#/components/schemas/PublishJob'                        
+			  404:
+          description: Not Found
+  /members:
+    get:
+      summary: Returns a list of cluster member ip
+      responses:
+        200:
+          description: OK
+          schema:
+            type: array
+            items:
+              type: string
+              description: ip address of other cluster member                        
+  /cover/{ip}:
+    get:
+      summary: Returns a cover node profile by cover node ip
+      parameters:
+	      - in: path
+		      name: ip
+		      required: true
+		      type: string
+		      description: cover node ip
+      responses:
+        200:
+          description: OK
+          schema:
+            $ref: '#/components/schemas/CoverNode'                        
+			  404:
+          description: Not Found
+  /cover:
+    get:
+      summary: Returns all cover node profile by cover node ip
+      responses:
+        200:
+          description: OK
+          schema:
+            type: array
+            items:
+              schema:
+                $ref: '#/components/schemas/CoverNode'                        
+  /key-pair:
+    get:
+      summary: Returns the key pair
+        responses:
+          200:
+            description: OK
+            schema:
+              type: object
+              properties:
+                public_key:
+                  type: string
+                  description: base64 encoded public key
+                private_key:
+                  type: string
+                  description: base64 encoded private key
+components:
+  schemas:
+    CoverNode:
+      type: object
+      properties:
+        symmetric_key:
+          type: string
+          description: symmetric key shared with the cover node in base64 encoding
+        connected_path_id:
+          type: string
+          description: path uuid that the cover node is currently connected to via you
+    Message:
+      type: object
+      properties:
+        content:
+          type: string
+          description: message content in base64 encoded string format
+    PublishJob:
+      type: object
+      properties:
+        message_key:
+          type: string
+          description: the base64 encoded key of the published message
+        status:
+          type: string
+          enum: [pending, success, timeout]
+        via_path:
+          type: string
+          description: the path uuid used for this publish job
+    Path:
+      type: object
+      properties:
+        id:
+          type: string
+          description: path uuid
+        next_hop_ip:
+          type: string
+        next_next_hop_ip:
+          type: string
+        proxy_public_key:
+          type: string
+          description: proxy node public key in base64 encoding
+        symmetric_key:
+          type: string
+          description: symmetric key shared with next-hop node in base64 encoding
+        analytics:
+          type: object
+          properties:
+            success_count: 
+              type: integer
+            failure_count:
+              type: integer  
