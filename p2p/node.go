@@ -18,6 +18,7 @@ import (
 	is "github.com/KelvinWu602/immutable-storage/blueprint"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/spf13/viper"
 )
 
 type Node struct {
@@ -37,9 +38,19 @@ type Node struct {
 }
 
 func StartNode() {
+	initConfigs()
 	initGobTypeRegistration()
 	node := NewNode()
 	node.initDependencies()
+	if viper.IsSet("CLUSTER_CONTACT_NODE_IP") {
+		logMsg("StartNode", "CLUSTER_CONTACT_NODE_IP is set. Calling ndClient.JoinCluster().")
+		_, err := node.ndClient.JoinCluster(viper.GetString("CLUSTER_CONTACT_NODE_IP"))
+		if err != nil {
+			logError("StartNode", err, "ndClient.JoinCluster error.")
+			os.Exit(1)
+		}
+		logMsg("StartNode", "ndClient.JoinCluster() Success")
+	}
 
 	go node.StartTCP()
 	go node.StartHTTP()
@@ -93,7 +104,16 @@ func (n *Node) initDependencies() {
 // StartTCP() starts the HTTP server for client
 func (n *Node) StartHTTP() {
 	// Start HTTP server for web client
-	logMsg("StartHTTP", "setting up HTTP server at localhost"+HTTP_SERVER_LISTEN_PORT)
+	// in production, should bind to only localhost, otherwise others may be able to retrieve sensitive information of this node
+	bindAllIP := viper.GetBool("TESTING_FLAG")
+	httpPort := viper.GetString("HTTP_SERVER_LISTEN_PORT")
+	var addr string
+	if bindAllIP {
+		addr = httpPort
+	} else {
+		addr = "localhost" + httpPort
+	}
+	logMsg("StartHTTP", "setting up HTTP server at "+addr)
 	router := gin.Default()
 
 	router.GET("/message/:key", n.handleGetMessage)
@@ -112,16 +132,16 @@ func (n *Node) StartHTTP() {
 
 	router.GET("/key-pair", n.handleGetKeyPair)
 
-	go router.Run("localhost" + HTTP_SERVER_LISTEN_PORT)
+	go router.Run(addr)
 	logMsg("StartHTTP", "HTTP server running")
 }
 
 // StartTCP() starts the internode communicating TCP
 func (n *Node) StartTCP() {
+	tcpPort := viper.GetString("TCP_SERVER_LISTEN_PORT")
+	logMsg("StartTCP", fmt.Sprintf("setting up TCP server at %v", tcpPort))
 
-	logMsg("StartTCP", "setting up TCP server at"+TCP_SERVER_LISTEN_PORT)
-
-	listener, err := net.Listen("tcp", TCP_SERVER_LISTEN_PORT)
+	listener, err := net.Listen("tcp", tcpPort)
 	if err != nil {
 		log.Printf("failed to listen: %s \n", err)
 	}
@@ -210,8 +230,21 @@ func initGobTypeRegistration() {
 }
 
 // A generic function used to send tcp requests and wait for response with a timeout.
+// destAddr can contain only IP address: TCP_SERVER_LISTEN_PORT will be appended as dest port
+// destAddr can contain full address, i.e. IP and Port: will directly use the full address
 func tcpSendAndWaitResponse[RESPONSE_TYPE any](reqBody *ProtocolMessage, destAddr string, keepAlive bool) (*RESPONSE_TYPE, *net.Conn, error) {
-	conn, err := net.Dial("tcp", destAddr)
+	var addr string
+	// validate destAddr
+	_, _, err := net.SplitHostPort(destAddr)
+	if err != nil {
+		// destAddr in form <IP>
+		addr = destAddr + viper.GetString("TCP_SERVER_LISTEN_PORT")
+	} else {
+		// destAddr in form <IP>:<Port>
+		addr = destAddr
+	}
+
+	conn, err := net.Dial("tcp", addr)
 	defer func() {
 		if !keepAlive {
 			conn.Close()
@@ -257,7 +290,7 @@ func waitForResponse[RESPONSE_TYPE any](conn net.Conn) (*RESPONSE_TYPE, error) {
 		return &resp, nil
 	case err := <-doneError:
 		return nil, err
-	case <-time.After(TCP_REQUEST_TIMEOUT):
+	case <-time.After(viper.GetDuration("TCP_REQUEST_TIMEOUT")):
 		return nil, errTimeout
 	}
 }
@@ -429,7 +462,7 @@ func (n *Node) ConnectPath(addr string, treeID uuid.UUID) (*ConnectPathResp, err
 		})
 
 		// Start the sendCoverMessageWorker
-		go n.sendCoverMessageWorker(*connPtr, COVER_MESSAGE_SENDING_INTERVAL, treeID)
+		go n.sendCoverMessageWorker(*connPtr, treeID)
 		// Store a pointer to the opened tcp connection for later publish jobs
 		n.openConnections.setValue(treeID, *connPtr)
 	}
@@ -471,7 +504,7 @@ func (n *Node) CreateProxy(addr string) (*CreateProxyResp, error) {
 		})
 
 		// Start the sendCoverMessageWorker
-		go n.sendCoverMessageWorker(*connPtr, COVER_MESSAGE_SENDING_INTERVAL, treeID)
+		go n.sendCoverMessageWorker(*connPtr, treeID)
 	}
 
 	logMsg("CreateProxy", fmt.Sprintf("Ends, Addr: %v", addr))
@@ -559,12 +592,13 @@ func (n *Node) fulfillPublishCondition() {
 	}
 	done := make(chan bool)
 
-	timeout := time.After(FULFILL_PUBLISH_CONDITION_TIMEOUT)
+	timeout := time.After(viper.GetDuration("FULFILL_PUBLISH_CONDITION_TIMEOUT"))
 
-	for n.paths.getSize() < TARGET_NUMBER_OF_CONNECTED_PATHS {
+	for n.paths.getSize() < viper.GetInt("TARGET_NUMBER_OF_CONNECTED_PATHS") {
 		go func() {
 			peerChoice := rand.Intn(clusterSize)
-			addr := resp.Member[peerChoice] + TCP_SERVER_LISTEN_PORT
+			// addr can be in both <IP> or <IP>:<Port> format
+			addr := resp.Member[peerChoice]
 			_, pendingPaths, _ := n.QueryPath(addr)
 			if len(pendingPaths) > 0 {
 				// if the peer offers some path, connect to it
@@ -745,7 +779,8 @@ func (n *Node) handleVerifyCoverReq(conn net.Conn, content *VerifyCoverReq) erro
 
 func (n *Node) handleConnectPathReq(conn net.Conn, content *ConnectPathReq) error {
 	// check number of cover nodes
-	shouldAcceptConnection := n.covers.getSize() < MAXIMUM_NUMBER_OF_COVER_NODES
+	_, alreadyMyCover := n.covers.getValue(conn.RemoteAddr().String())
+	shouldAcceptConnection := n.covers.getSize() < viper.GetInt("MAXIMUM_NUMBER_OF_COVER_NODES") && !alreadyMyCover
 
 	var connectPathResponse ConnectPathResp
 
@@ -793,7 +828,8 @@ func (n *Node) handleConnectPathReq(conn net.Conn, content *ConnectPathReq) erro
 
 func (n *Node) handleCreateProxyReq(conn net.Conn, content *CreateProxyReq) error {
 	// check number of cover nodes
-	shouldAcceptConnection := n.covers.getSize() < MAXIMUM_NUMBER_OF_COVER_NODES
+	_, alreadyMyCover := n.covers.getValue(conn.RemoteAddr().String())
+	shouldAcceptConnection := n.covers.getSize() < viper.GetInt("MAXIMUM_NUMBER_OF_COVER_NODES") && !alreadyMyCover
 
 	var createProxyResponse CreateProxyResp
 
@@ -1068,7 +1104,10 @@ func (n *Node) handlePostPath(c *gin.Context) {
 	var resultPathId uuid.UUID
 	if len(body.IP) > 0 && body.PathID != uuid.Nil {
 		// Connect Path
-		addr := body.IP + TCP_SERVER_LISTEN_PORT
+		addr := body.IP
+		if len(body.Port) > 0 {
+			addr += body.Port
+		}
 		resp, err := n.ConnectPath(addr, body.PathID)
 		if err != nil {
 			c.IndentedJSON(http.StatusInternalServerError, gin.H{"message": "connect path error", "error": err})
@@ -1079,7 +1118,7 @@ func (n *Node) handlePostPath(c *gin.Context) {
 			return
 		}
 		resultPathId = body.PathID
-	} else if len(body.IP) == 0 && body.PathID == uuid.Nil {
+	} else if len(body.IP) == 0 && len(body.Port) == 0 && body.PathID == uuid.Nil {
 		// Become Proxy
 		newPathID, _ := uuid.NewUUID()
 		n.paths.setValue(newPathID, PathProfile{

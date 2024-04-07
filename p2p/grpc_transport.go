@@ -8,6 +8,7 @@ import (
 	"github.com/KelvinWu602/immutable-storage/blueprint"
 	isProtos "github.com/KelvinWu602/immutable-storage/protos"
 	ndProtos "github.com/KelvinWu602/node-discovery/protos"
+	"github.com/spf13/viper"
 	"google.golang.org/grpc"
 )
 
@@ -22,7 +23,7 @@ type ImmutableStorageClient struct {
 }
 
 func (nc *NodeDiscoveryClient) New() error {
-	addr := "localhost" + NODE_DISCOVERY_SERVER_LISTEN_PORT
+	addr := "localhost" + viper.GetString("NODE_DISCOVERY_SERVER_LISTEN_PORT")
 	conn, err := grpc.Dial(addr, grpc.WithInsecure(), grpc.WithBlock())
 	if err != nil {
 		log.Printf("Cannot connect to Node Discovery: %s \n", err)
@@ -51,7 +52,8 @@ func (nc *NodeDiscoveryClient) GetMembers() (*ndProtos.GetMembersReponse, error)
 }
 
 func (ic *ImmutableStorageClient) New() error {
-	conn, err := grpc.Dial("localhost"+IMMUTABLE_STORAGE_SERVER_LISTEN_PORT, grpc.WithInsecure(), grpc.WithBlock())
+	addr := "localhost" + viper.GetString("IMMUTABLE_STORAGE_SERVER_LISTEN_PORT")
+	conn, err := grpc.Dial(addr, grpc.WithInsecure(), grpc.WithBlock())
 	if err != nil {
 		log.Printf("Cannot connect to Immutable Storage: %s \n", err)
 		return err

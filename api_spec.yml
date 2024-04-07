@@ -88,6 +88,8 @@ paths:
                   properties:
                     ip:
                       type: string
+                    port:
+                      type: string
                     path_id:
                       type: string
                 - type: object

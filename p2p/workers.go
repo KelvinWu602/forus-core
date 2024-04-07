@@ -11,6 +11,7 @@ import (
 	"golang.org/x/exp/slices"
 
 	"github.com/google/uuid"
+	"github.com/spf13/viper"
 )
 
 type PublishJobStatus uint
@@ -61,7 +62,7 @@ func (node *Node) blacklistPathIDs() []uuid.UUID {
 	// for every path, check if FailureCount > failureThreshold
 	results := []uuid.UUID{}
 	node.paths.iterate(func(pathID uuid.UUID, path PathProfile) {
-		if path.failureCount >= MOVE_UP_REQUIREMENT_FAILURE_THRESHOLD {
+		if path.failureCount >= viper.GetInt("MOVE_UP_REQUIREMENT_FAILURE_THRESHOLD") {
 			results = append(results, pathID)
 		}
 	}, false)
@@ -85,7 +86,7 @@ func (node *Node) invalidPathProfiles() []InvalidPathProfile {
 		if oldPath.next == "ImmutableStorage" {
 			return
 		}
-		nextHopAddr := oldPath.next + TCP_SERVER_LISTEN_PORT
+		nextHopAddr := oldPath.next
 		resp, err := node.sendQueryPathRequest(nextHopAddr)
 		if err != nil {
 			// next-hop is unreachable, should clean this path
@@ -111,11 +112,11 @@ func (node *Node) invalidPathProfiles() []InvalidPathProfile {
 
 func (node *Node) canPublish(lock bool) bool {
 	if lock {
-		return node.covers.getSize() >= NUMBER_OF_COVER_NODES_FOR_PUBLISH &&
-			node.paths.getSize() >= TARGET_NUMBER_OF_CONNECTED_PATHS
+		return node.covers.getSize() >= viper.GetInt("NUMBER_OF_COVER_NODES_FOR_PUBLISH") &&
+			node.paths.getSize() >= viper.GetInt("TARGET_NUMBER_OF_CONNECTED_PATHS")
 	}
-	return len(node.covers.data) >= NUMBER_OF_COVER_NODES_FOR_PUBLISH &&
-		len(node.paths.data) >= TARGET_NUMBER_OF_CONNECTED_PATHS
+	return len(node.covers.data) >= viper.GetInt("NUMBER_OF_COVER_NODES_FOR_PUBLISH") &&
+		len(node.paths.data) >= viper.GetInt("TARGET_NUMBER_OF_CONNECTED_PATHS")
 }
 
 // workers
@@ -126,8 +127,8 @@ func (node *Node) checkPublishJobStatusWorker(jobID uuid.UUID) {
 
 	logMsg("checkPublishJobStatusWorker", fmt.Sprintf("Started, JobID: %v", jobID.String()))
 
-	timeout := PUBLISH_JOB_FAILED_TIMEOUT
-	checkInterval := PUBLISH_JOB_CHECKING_INTERVAL
+	timeout := viper.GetDuration("PUBLISH_JOB_FAILED_TIMEOUT")
+	checkInterval := viper.GetDuration("PUBLISH_JOB_CHECKING_INTERVAL")
 
 	// check if the job really exists
 	publishJobProfile, jobExists := node.publishJobs.getValue(jobID)
@@ -204,7 +205,7 @@ func (node *Node) maintainPathsHealthWorker() {
 		fixPathWg.Wait()
 		logMsg("maintainPathsHealthWorker", "Invalid Paths Check Done")
 		logMsg("maintainPathsHealthWorker", "Iteration Ends")
-		time.Sleep(MAINTAIN_PATHS_HEALTH_CHECKING_INTERVAL)
+		time.Sleep(viper.GetDuration("MAINTAIN_PATHS_HEALTH_CHECKING_INTERVAL"))
 	}
 }
 
@@ -218,12 +219,12 @@ func (node *Node) checkPublishConditionWorker() {
 			node.fulfillPublishCondition()
 		}
 
-		time.Sleep(PUBLISH_CONDITION_CHECKING_INTERVAL)
+		time.Sleep(viper.GetDuration("PUBLISH_CONDITION_CHECKING_INTERVAL"))
 	}
 
 }
 
-func (node *Node) sendCoverMessageWorker(conn net.Conn, interval time.Duration, pathID uuid.UUID) {
+func (node *Node) sendCoverMessageWorker(conn net.Conn, pathID uuid.UUID) {
 
 	logMsg("sendCoverMessageWorker", fmt.Sprintf("sendCoverMessageWorker to %s on path %v is started successfully.", conn.RemoteAddr().String(), pathID.String()))
 
@@ -260,7 +261,7 @@ func (node *Node) sendCoverMessageWorker(conn net.Conn, interval time.Duration, 
 
 			logMsg("sendCoverMessageWorker", fmt.Sprintf("cover message to %s on path %v is sent successfully.", conn.RemoteAddr().String(), pathID.String()))
 
-			time.Sleep(interval)
+			time.Sleep(viper.GetDuration("COVER_MESSAGE_SENDING_INTERVAL"))
 		}
 	}
 }
@@ -297,7 +298,7 @@ func (node *Node) handleApplicationMessageWorker(conn net.Conn) {
 			logError("handleApplicationMessageWorker", err, fmt.Sprintf("error when receiving application message from %s", conn.RemoteAddr().String()))
 			node.covers.deleteValue(coverIp)
 			return
-		case <-time.After(APPLICATION_MESSAGE_RECEIVING_INTERVAL):
+		case <-time.After(viper.GetDuration("APPLICATION_MESSAGE_RECEIVING_INTERVAL")):
 			logMsg("handleApplicationMessageWorker", fmt.Sprintf("handleApplicationMessageWorker from %s: COVER MESSAGE TIMEOUT.\n", conn.RemoteAddr().String()))
 			node.covers.deleteValue(coverIp)
 			return

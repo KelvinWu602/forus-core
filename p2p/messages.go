@@ -135,6 +135,7 @@ type HTTPPostMessageReq struct {
 
 type HTTPPostPathReq struct {
 	IP     string    `json:"ip,omitempty"`
+	Port   string    `json:"port,omitempty"`
 	PathID uuid.UUID `json:"path_id,omitempty"`
 }
 
