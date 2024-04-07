@@ -611,15 +611,20 @@ func (n *Node) fulfillPublishCondition() {
 			peerChoice := rand.Intn(clusterSize)
 			// addr can be in both <IP> or <IP>:<Port> format
 			addr := resp.Member[peerChoice]
+			logMsg("fulfillPublishCondition", fmt.Sprintf("Connect %v", addr))
 			_, pendingPaths, _ := n.QueryPath(addr)
 			if len(pendingPaths) > 0 {
 				// if the peer offers some path, connect to it
 				// will not connect to all path under the same node to diverse risk
 				pathChoice := rand.Intn(len(pendingPaths))
-				n.ConnectPath(addr, pendingPaths[pathChoice].uuid)
+				if _, err := n.ConnectPath(addr, pendingPaths[pathChoice].uuid); err != nil {
+					logError("fulfillPublishCondition", err, fmt.Sprintf("ConnectPath Error: Connect %v", addr))
+				}
 			} else {
 				// if the peer does not have path, ask it to become a proxy
-				n.CreateProxy(addr)
+				if _, err := n.CreateProxy(addr); err != nil {
+					logError("fulfillPublishCondition", err, fmt.Sprintf("CreateProxy Error: Connect %v", addr))
+				}
 			}
 			done <- true
 		}()

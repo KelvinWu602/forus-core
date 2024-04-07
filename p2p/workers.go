@@ -179,6 +179,7 @@ func (node *Node) maintainPathsHealthWorker() {
 	for {
 		logMsg("maintainPathsHealthWorker", "Iteration Starts")
 		for _, pathID := range node.blacklistPathIDs() {
+			logMsg("maintainPathsHealthWorker", fmt.Sprintf("Handle blacklist path: %v", pathID))
 			moveUpWg.Add(1)
 			go func(pathID uuid.UUID) {
 				node.MoveUp(pathID)
@@ -189,6 +190,7 @@ func (node *Node) maintainPathsHealthWorker() {
 		logMsg("maintainPathsHealthWorker", "Blacklist Paths Check Done")
 
 		for _, report := range node.invalidPathProfiles() {
+			logMsg("maintainPathsHealthWorker", fmt.Sprintf("Handle invalid path: %v %v", report.SelfProfile.uuid, report.HandleType))
 			fixPathWg.Add(1)
 			go func(report InvalidPathProfile) {
 				switch report.HandleType {
