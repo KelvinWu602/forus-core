@@ -144,6 +144,7 @@ type HTTPSchemaMessage struct {
 }
 
 type HTTPSchemaCoverNode struct {
+	CoverIP            string    `json:"cover_ip"`
 	SymmetricKeyInByte []byte    `json:"symmetric_key"`
 	ConnectedPathId    uuid.UUID `json:"connected_path_id"`
 }

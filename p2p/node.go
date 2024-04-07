@@ -1270,6 +1270,7 @@ func (n *Node) handleGetCover(c *gin.Context) {
 		return
 	}
 	c.IndentedJSON(http.StatusOK, HTTPSchemaCoverNode{
+		CoverIP:            coverIP,
 		SymmetricKeyInByte: symKeyInByte,
 		ConnectedPathId:    cover.treeUUID,
 	})
@@ -1285,6 +1286,7 @@ func (n *Node) handleGetCovers(c *gin.Context) {
 			return
 		}
 		result = append(result, HTTPSchemaCoverNode{
+			CoverIP:            coverIP,
 			SymmetricKeyInByte: symKeyInByte,
 			ConnectedPathId:    cover.treeUUID,
 		})
