@@ -353,6 +353,7 @@ func (n *Node) sendConnectPathRequest(addr string, treeID uuid.UUID, n3X DHKeyEx
 			return nil, nil, errors.New("public key of " + addr + " is unknown")
 		}
 		logMsg("sendConnectPathRequest", fmt.Sprintf("success QueryPath with verified paths = %v", verified))
+		targetPublicKey, _ = n.peerPublicKeys.getValue(addr)
 	}
 
 	encryptedTreeUUID, err := EncryptUUID(treeID, targetPublicKey)
