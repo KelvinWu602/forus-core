@@ -265,9 +265,7 @@ func (node *Node) sendCoverMessageWorker(conn net.Conn, pathID uuid.UUID) {
 			node.paths.deleteValue(pathID)
 			return
 		case <-doneSuccess:
-
 			logMsg("sendCoverMessageWorker", fmt.Sprintf("cover message to %s on path %v is sent successfully.", conn.RemoteAddr().String(), pathID.String()))
-
 			time.Sleep(viper.GetDuration("COVER_MESSAGE_SENDING_INTERVAL"))
 		}
 	}
@@ -290,7 +288,10 @@ func (node *Node) handleApplicationMessageWorker(conn net.Conn, coverProfileKey 
 	defer close(doneSuccess)
 	defer close(doneErr)
 
+	var wg sync.WaitGroup
+
 	for {
+		wg.Add(1)
 		go func() {
 			msg := ApplicationMessage{}
 			err := decoder.Decode(&msg)
@@ -299,6 +300,7 @@ func (node *Node) handleApplicationMessageWorker(conn net.Conn, coverProfileKey 
 			} else {
 				doneSuccess <- msg
 			}
+			wg.Done()
 		}()
 
 		select {
@@ -312,6 +314,7 @@ func (node *Node) handleApplicationMessageWorker(conn net.Conn, coverProfileKey 
 			return
 		case <-time.After(viper.GetDuration("APPLICATION_MESSAGE_RECEIVING_INTERVAL")):
 			logMsg("handleApplicationMessageWorker", fmt.Sprintf("handleApplicationMessageWorker from %s: COVER MESSAGE TIMEOUT.\n", conn.RemoteAddr().String()))
+			wg.Wait()
 			node.covers.deleteValue(coverIp)
 			return
 		}

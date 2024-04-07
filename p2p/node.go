@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"syscall"
 	"time"
 
 	is "github.com/KelvinWu602/immutable-storage/blueprint"
@@ -57,7 +58,7 @@ func StartNode() {
 	go node.maintainPathsHealthWorker()
 
 	terminate := make(chan os.Signal, 1)
-	signal.Notify(terminate, os.Interrupt)
+	signal.Notify(terminate, os.Interrupt, syscall.SIGTERM)
 	// wait for the SIGINT signal (Ctrl+C)
 	<-terminate
 }
@@ -284,6 +285,7 @@ func waitForResponse[RESPONSE_TYPE any](conn net.Conn) (*RESPONSE_TYPE, error) {
 
 	doneSuccess := make(chan RESPONSE_TYPE)
 	doneError := make(chan error)
+
 	go func() {
 		response := new(RESPONSE_TYPE)
 		err := gob.NewDecoder(conn).Decode(&response)
@@ -1145,7 +1147,7 @@ func (n *Node) handlePostPath(c *gin.Context) {
 		}
 		resp, err := n.ConnectPath(addr, body.PathID)
 		if err != nil {
-			c.IndentedJSON(http.StatusInternalServerError, gin.H{"message": "connect path error", "error": err})
+			c.IndentedJSON(http.StatusInternalServerError, gin.H{"message": "connect path error", "error": err.Error()})
 			return
 		}
 		if !resp.Status {
