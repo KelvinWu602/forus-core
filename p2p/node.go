@@ -250,16 +250,15 @@ func tcpSendAndWaitResponse[RESPONSE_TYPE any](reqBody *ProtocolMessage, destAdd
 	}
 
 	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		logError("tcpSendAndWaitResponse", err, fmt.Sprintf("error at net.Dial('tcp', destAddr) where destAddr = %v", destAddr))
+		return nil, nil, err
+	}
 	defer func() {
 		if !keepAlive && conn != nil {
 			conn.Close()
 		}
 	}()
-	if err != nil {
-		logError("tcpSendAndWaitResponse", err, fmt.Sprintf("error at net.Dial('tcp', destAddr) where destAddr = %v", destAddr))
-		return nil, nil, err
-	}
-	defer conn.Close()
 
 	err = gob.NewEncoder(conn).Encode(*reqBody)
 	if err != nil {
