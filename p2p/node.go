@@ -243,6 +243,8 @@ func initGobTypeRegistration() {
 // destAddr can contain only IP address: TCP_SERVER_LISTEN_PORT will be appended as dest port
 // destAddr can contain full address, i.e. IP and Port: will directly use the full address
 func tcpSendAndWaitResponse[RESPONSE_TYPE any](reqBody *ProtocolMessage, destAddr string, keepAlive bool) (*RESPONSE_TYPE, *net.Conn, error) {
+	logMsg("tcpSendAndWaitResponse", fmt.Sprintf("reqBody = %v, destAddr = %v, keepAlive = %v", reqBody, destAddr, keepAlive))
+
 	var addr string
 	// validate destAddr
 	_, _, err := net.SplitHostPort(destAddr)
@@ -371,6 +373,7 @@ func (n *Node) sendConnectPathRequest(addr string, treeID uuid.UUID, n3X DHKeyEx
 		Content: serialized,
 	}
 
+	logMsg("sendConnectPathRequest", fmt.Sprintf("success constructed Protocol Message = %v", connectPathReq))
 	return tcpSendAndWaitResponse[ConnectPathResp](&connectPathReq, addr, true)
 }
 
@@ -419,6 +422,12 @@ func (n *Node) QueryPath(addr string) (*QueryPathResp, []PathProfile, error) {
 			if err != nil {
 				continue
 			}
+			// skip paths that this node have already added
+			_, alreadyConnected := n.paths.getValue(pathID)
+			if alreadyConnected {
+				continue
+			}
+
 			halfOpenPath := PathProfile{
 				uuid:        pathID,
 				next:        addr,
@@ -456,7 +465,7 @@ func (n *Node) ConnectPath(addr string, treeID uuid.UUID) (*ConnectPathResp, err
 	resp, connPtr, err := n.sendConnectPathRequest(addr, treeID, keyExchangeInfo)
 	if err != nil {
 		logError("ConnectPath", err, fmt.Sprintf("Ends, Addr: %v; TreeID: %v", addr, treeID))
-		return resp, err
+		return nil, err
 	}
 
 	if resp.Status {
