@@ -43,6 +43,10 @@ func StartNode() {
 	node := NewNode()
 	node.initDependencies()
 
+	defer func() {
+		node.ndClient.LeaveCluster()
+	}()
+
 	go node.StartTCP()
 	// join cluster after TCP server is set up
 	node.joinCluster()
