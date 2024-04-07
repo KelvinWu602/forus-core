@@ -42,17 +42,11 @@ func StartNode() {
 	initGobTypeRegistration()
 	node := NewNode()
 	node.initDependencies()
-	if viper.IsSet("CLUSTER_CONTACT_NODE_IP") {
-		logMsg("StartNode", "CLUSTER_CONTACT_NODE_IP is set. Calling ndClient.JoinCluster().")
-		_, err := node.ndClient.JoinCluster(viper.GetString("CLUSTER_CONTACT_NODE_IP"))
-		if err != nil {
-			logError("StartNode", err, "ndClient.JoinCluster error.")
-			os.Exit(1)
-		}
-		logMsg("StartNode", "ndClient.JoinCluster() Success")
-	}
 
 	go node.StartTCP()
+	// join cluster after TCP server is set up
+	node.joinCluster()
+	// after joined a cluster, start process user request
 	go node.StartHTTP()
 
 	go node.checkPublishConditionWorker()
@@ -101,6 +95,18 @@ func (n *Node) initDependencies() {
 	n.isClient = initImmutableStorageClient()
 	logMsg("initDependencies", "completed dependencies setups")
 
+}
+
+func (n *Node) joinCluster() {
+	if viper.IsSet("CLUSTER_CONTACT_NODE_IP") {
+		logMsg("StartNode", "CLUSTER_CONTACT_NODE_IP is set. Calling ndClient.JoinCluster().")
+		_, err := n.ndClient.JoinCluster(viper.GetString("CLUSTER_CONTACT_NODE_IP"))
+		if err != nil {
+			logError("StartNode", err, "ndClient.JoinCluster error.")
+			os.Exit(1)
+		}
+		logMsg("StartNode", "ndClient.JoinCluster() Success")
+	}
 }
 
 // StartTCP() starts the HTTP server for client
