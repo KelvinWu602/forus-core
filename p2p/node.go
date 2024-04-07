@@ -855,6 +855,7 @@ func (n *Node) handleCreateProxyReq(conn net.Conn, content *CreateProxyReq) erro
 	shouldAcceptConnection := n.covers.getSize() < viper.GetInt("MAXIMUM_NUMBER_OF_COVER_NODES") && !alreadyMyCover
 
 	var createProxyResponse CreateProxyResp
+	var coverProfileKey string
 
 	if shouldAcceptConnection {
 
@@ -875,7 +876,8 @@ func (n *Node) handleCreateProxyReq(conn net.Conn, content *CreateProxyReq) erro
 		})
 
 		// new cover node
-		n.covers.setValue(conn.RemoteAddr().String(), CoverNodeProfile{
+		coverProfileKey = conn.RemoteAddr().String()
+		n.covers.setValue(coverProfileKey, CoverNodeProfile{
 			cover:     conn.RemoteAddr().String(),
 			secretKey: secretKey,
 			treeUUID:  newPathID,
@@ -910,7 +912,7 @@ func (n *Node) handleCreateProxyReq(conn net.Conn, content *CreateProxyReq) erro
 	if shouldAcceptConnection {
 		// conn will be closed by handleApplicationMessageWorker
 		// If everything works, start a worker handling all incoming Application Messages(Real and Cover) from this cover node.
-		go n.handleApplicationMessageWorker(conn)
+		go n.handleApplicationMessageWorker(conn, coverProfileKey)
 	} else {
 		defer conn.Close()
 	}

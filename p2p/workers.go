@@ -275,7 +275,7 @@ func (node *Node) sendCoverMessageWorker(conn net.Conn, pathID uuid.UUID) {
 
 func (node *Node) handleApplicationMessageWorker(conn net.Conn, coverProfileKey string) {
 	if conn == nil {
-		logMsg("handleApplicationMessageWorker", "handleApplicationMessageWorker failed to start due to conn = nil.")
+		logMsg("handleApplicationMessageWorker", fmt.Sprintf("handleApplicationMessageWorker failed to start due to conn = nil, CoverIP = %v.", coverProfileKey))
 		node.covers.deleteValue(coverProfileKey)
 		return
 	}
