@@ -99,6 +99,8 @@ func (n *Node) initDependencies() {
 	logMsg("initDependencies", "setting up dependencies...")
 	n.ndClient = initNodeDiscoverClient()
 	n.isClient = initImmutableStorageClient()
+	logMsg("initDependencies", "completed dependencies setups")
+
 }
 
 // StartTCP() starts the HTTP server for client
