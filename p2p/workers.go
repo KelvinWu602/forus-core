@@ -172,7 +172,7 @@ func (node *Node) checkPublishJobStatusWorker(jobID uuid.UUID) {
 
 func (node *Node) maintainPathsHealthWorker() {
 
-	logMsg("maintainPathsHealthWorker", "Started")
+	logMsg("maintainPathsHealthWorker", fmt.Sprintf("Started, sleep interval = %v", viper.GetDuration("MAINTAIN_PATHS_HEALTH_CHECKING_INTERVAL")))
 
 	var moveUpWg sync.WaitGroup
 	var fixPathWg sync.WaitGroup
@@ -213,7 +213,7 @@ func (node *Node) maintainPathsHealthWorker() {
 
 func (node *Node) checkPublishConditionWorker() {
 
-	logMsg("checkPublishConditionWorker", "Started")
+	logMsg("checkPublishConditionWorker", fmt.Sprintf("Started, sleep interval = %v", viper.GetDuration("PUBLISH_CONDITION_CHECKING_INTERVAL")))
 
 	for {
 
