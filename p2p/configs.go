@@ -34,10 +34,11 @@ func initConfigs() {
 	viper.SetDefault("TESTING_FLAG", false)
 
 	// config.yaml
-	viper.SetConfigFile("../config.yaml")
+	viper.SetConfigFile("./config.yaml")
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
-	viper.AddConfigPath("..")
+	// project root folder, ame level as main.go
+	viper.AddConfigPath(".")
 	err := viper.ReadInConfig()
 	if err != nil {
 		logError("initConfigs", err, "failed to load config.yaml, use default configs")
