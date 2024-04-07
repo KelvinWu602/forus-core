@@ -420,8 +420,12 @@ func (n *Node) QueryPath(addr string) (*QueryPathResp, []PathProfile, error) {
 				symKey:      big.Int{}, // placeholder
 			}
 			// Ask my next-next hop to verify if my next-hop is one of its cover nodes
-			verifyCoverResp, err := n.sendVerifyCoverRequest(halfOpenPath.next2, halfOpenPath.next)
-			if err == nil && verifyCoverResp.IsVerified {
+			verified := halfOpenPath.next2 == "ImmutableStorage"
+			if !verified {
+				verifyCoverResp, err := n.sendVerifyCoverRequest(halfOpenPath.next2, halfOpenPath.next)
+				verified = err == nil && verifyCoverResp.IsVerified
+			}
+			if verified {
 				verifiedPaths = append(verifiedPaths, halfOpenPath)
 				n.halfOpenPath.setValue(pathID, halfOpenPath)
 			}
