@@ -464,9 +464,9 @@ func (n *Node) ConnectPath(addr string, treeID uuid.UUID) (*ConnectPathResp, err
 
 		// create new path profile
 		n.paths.setValue(treeID, PathProfile{
-			uuid:         treeID,
-			next:         addr,
-			next2:        halfOpenPathProfile.next,
+			uuid:         halfOpenPathProfile.uuid,
+			next:         halfOpenPathProfile.next,
+			next2:        halfOpenPathProfile.next2,
 			proxyPublic:  halfOpenPathProfile.proxyPublic,
 			symKey:       resp.KeyExchange.GetSymKey(*myKeyExchangeSecret),
 			successCount: 0,
