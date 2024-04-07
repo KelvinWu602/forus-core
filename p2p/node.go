@@ -450,7 +450,7 @@ func (n *Node) ConnectPath(addr string, treeID uuid.UUID) (*ConnectPathResp, err
 
 	resp, connPtr, err := n.sendConnectPathRequest(addr, treeID, keyExchangeInfo)
 	if err != nil {
-		logMsg("ConnectPath", fmt.Sprintf("Ends, Addr: %v; TreeID: %v", addr, treeID))
+		logError("ConnectPath", err, fmt.Sprintf("Ends, Addr: %v; TreeID: %v", addr, treeID))
 		return resp, err
 	}
 
@@ -458,7 +458,7 @@ func (n *Node) ConnectPath(addr string, treeID uuid.UUID) (*ConnectPathResp, err
 		// retrieve the half open path profile
 		halfOpenPathProfile, found := n.halfOpenPath.getValue(treeID)
 		if !found {
-			logMsg("ConnectPath", fmt.Sprintf("Ends, Addr: %v; TreeID: %v", addr, treeID))
+			logMsg("ConnectPath", fmt.Sprintf("Ends, Addr: %v; TreeID: %v  : error halfOpenPath not found", addr, treeID))
 			return resp, errors.New("halfOpenPath not found")
 		}
 		// delete the half open path profile, as it is completely 'open'.
@@ -496,14 +496,14 @@ func (n *Node) CreateProxy(addr string) (*CreateProxyResp, error) {
 
 	resp, connPtr, err := n.sendCreateProxyRequest(addr, keyExchangeInfo)
 	if err != nil {
-		logMsg("CreateProxy", fmt.Sprintf("Ends, Addr: %v", addr))
+		logError("CreateProxy", err, fmt.Sprintf("Ends, Addr: %v", addr))
 		return resp, err
 	}
 
 	if resp.Status {
 		treeID, err := DecryptUUID(resp.EncryptedTreeUUID, n.privateKey)
 		if err != nil {
-			logMsg("CreateProxy", fmt.Sprintf("Ends, Addr: %v", addr))
+			logMsg("CreateProxy", fmt.Sprintf("Ends, Addr: %v : Error malformed encryptedTreeUUID", addr))
 			return nil, errors.New("malformed encryptedTreeUUID")
 		}
 		// create new path profile
@@ -541,8 +541,7 @@ func (n *Node) MoveUp(pathID uuid.UUID) {
 		if originalNextNext == "ImmutableStorage" {
 			// next-next-hop is ImmutableStorage --> next-hop is proxy --> cannot move up, delete this blacklist path
 			n.paths.deleteValue(pathID)
-			logMsg("MoveUp", fmt.Sprintf("Ends, Path: %v", pathID.String()))
-
+			logMsg("MoveUp", fmt.Sprintf("Ends, Path: %v:  Case: Next-Next is ImmutableStorage, path is removed", pathID.String()))
 			return
 		}
 		// 2) send verifyCover(originalNext) to originNextNext
@@ -550,8 +549,7 @@ func (n *Node) MoveUp(pathID uuid.UUID) {
 		if err != nil {
 			// next-next-hop is unreachable --> cannot move up, delete this blacklist path
 			n.paths.deleteValue(pathID)
-			logMsg("MoveUp", fmt.Sprintf("Ends, Path: %v", pathID.String()))
-
+			logError("MoveUp", err, fmt.Sprintf("Ends, Path: %v:  Case: error during verifyCover, path is removed", pathID.String()))
 			return
 		}
 		if resp.IsVerified {
@@ -559,8 +557,7 @@ func (n *Node) MoveUp(pathID uuid.UUID) {
 			resp, _ := n.ConnectPath(originalNextNext, pathID)
 			if resp.Status {
 				// if success, done
-				logMsg("MoveUp", fmt.Sprintf("Ends, Path: %v", pathID.String()))
-
+				logMsg("MoveUp", fmt.Sprintf("Ends, Path: %v:  Case: Successfully connected to next next hop", pathID.String()))
 				return
 			}
 		}
@@ -585,7 +582,7 @@ func (n *Node) MoveUp(pathID uuid.UUID) {
 		n.paths.setValue(newPathProfile.uuid, newPathProfile)
 	}
 
-	logMsg("MoveUp", fmt.Sprintf("Ends, Path: %v", pathID.String()))
+	logMsg("MoveUp", fmt.Sprintf("Ends, Path: %v:  Case: Self becomes proxy success", pathID.String()))
 }
 
 // Tree Formation Process by aggregating QueryPath, CreateProxy, ConnectPath & joining cluster
@@ -778,8 +775,9 @@ func (n *Node) handleQueryPathReq(conn net.Conn, content *QueryPathReq) error {
 	err := gob.NewEncoder(conn).Encode(queryPathResp)
 	if err != nil {
 		logProtocolMessageHandlerError("handleQueryPathReq", conn, err, content)
+		return err
 	}
-	return err
+	return nil
 }
 
 func (n *Node) handleVerifyCoverReq(conn net.Conn, content *VerifyCoverReq) error {
@@ -794,8 +792,9 @@ func (n *Node) handleVerifyCoverReq(conn net.Conn, content *VerifyCoverReq) erro
 	err := gob.NewEncoder(conn).Encode(verifyCoverResp)
 	if err != nil {
 		logProtocolMessageHandlerError("handleVerifyCoverReq", conn, err, content)
+		return err
 	}
-	return err
+	return nil
 }
 
 func (n *Node) handleConnectPathReq(conn net.Conn, content *ConnectPathReq) error {
@@ -851,7 +850,7 @@ func (n *Node) handleConnectPathReq(conn net.Conn, content *ConnectPathReq) erro
 	} else {
 		defer conn.Close()
 	}
-	return err
+	return nil
 }
 
 func (n *Node) handleCreateProxyReq(conn net.Conn, content *CreateProxyReq) error {
@@ -913,6 +912,7 @@ func (n *Node) handleCreateProxyReq(conn net.Conn, content *CreateProxyReq) erro
 	err := gob.NewEncoder(conn).Encode(createProxyResponse)
 	if err != nil {
 		logProtocolMessageHandlerError("handleCreateProxyReq", conn, err, content)
+		return err
 	}
 	if shouldAcceptConnection {
 		// conn will be closed by handleApplicationMessageWorker
@@ -921,7 +921,7 @@ func (n *Node) handleCreateProxyReq(conn net.Conn, content *CreateProxyReq) erro
 	} else {
 		defer conn.Close()
 	}
-	return err
+	return nil
 }
 
 // ****************
