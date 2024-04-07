@@ -192,9 +192,6 @@ func (n *Node) handleConnection(conn net.Conn) {
 
 // A switch between handlers
 func (n *Node) handleMessage(conn net.Conn, msg ProtocolMessage) error {
-	// close connection no matter what
-	defer conn.Close()
-
 	switch msg.Type {
 	case QueryPathRequest:
 		req := QueryPathReq{}
@@ -750,6 +747,7 @@ func (n *Node) Forward(asymOutput []byte, coverIP string) error {
 // ****************
 
 func (n *Node) handleQueryPathReq(conn net.Conn, content *QueryPathReq) error {
+	defer conn.Close()
 	// send response with QueryPathResp
 	queryPathResp := QueryPathResp{
 		NodePublicKey: n.publicKey,
@@ -780,6 +778,7 @@ func (n *Node) handleQueryPathReq(conn net.Conn, content *QueryPathReq) error {
 }
 
 func (n *Node) handleVerifyCoverReq(conn net.Conn, content *VerifyCoverReq) error {
+	defer conn.Close()
 	coverToBeVerified := content.NextHop
 	_, isVerified := n.covers.getValue(coverToBeVerified)
 
@@ -838,8 +837,13 @@ func (n *Node) handleConnectPathReq(conn net.Conn, content *ConnectPathReq) erro
 		logProtocolMessageHandlerError("handleConnectPathReq", conn, err, content)
 		return err
 	}
-	// If everything works, start a worker handling all incoming Application Messages(Real and Cover) from this cover node.
-	go n.handleApplicationMessageWorker(conn)
+	if shouldAcceptConnection {
+		// conn will be closed by handleApplicationMessageWorker
+		// If everything works, start a worker handling all incoming Application Messages(Real and Cover) from this cover node.
+		go n.handleApplicationMessageWorker(conn)
+	} else {
+		defer conn.Close()
+	}
 	return err
 }
 
@@ -900,6 +904,13 @@ func (n *Node) handleCreateProxyReq(conn net.Conn, content *CreateProxyReq) erro
 	err := gob.NewEncoder(conn).Encode(createProxyResponse)
 	if err != nil {
 		logProtocolMessageHandlerError("handleCreateProxyReq", conn, err, content)
+	}
+	if shouldAcceptConnection {
+		// conn will be closed by handleApplicationMessageWorker
+		// If everything works, start a worker handling all incoming Application Messages(Real and Cover) from this cover node.
+		go n.handleApplicationMessageWorker(conn)
+	} else {
+		defer conn.Close()
 	}
 	return err
 }

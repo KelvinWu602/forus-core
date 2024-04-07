@@ -227,8 +227,12 @@ func (node *Node) checkPublishConditionWorker() {
 }
 
 func (node *Node) sendCoverMessageWorker(conn net.Conn, pathID uuid.UUID) {
-
+	if conn == nil {
+		logMsg("sendCoverMessageWorker", fmt.Sprintf("sendCoverMessageWorker on path %v failed to start due to conn = nil.", pathID.String()))
+		return
+	}
 	logMsg("sendCoverMessageWorker", fmt.Sprintf("sendCoverMessageWorker to %s on path %v is started successfully.", conn.RemoteAddr().String(), pathID.String()))
+	defer conn.Close()
 
 	encoder := gob.NewEncoder(conn)
 
@@ -269,7 +273,12 @@ func (node *Node) sendCoverMessageWorker(conn net.Conn, pathID uuid.UUID) {
 }
 
 func (node *Node) handleApplicationMessageWorker(conn net.Conn) {
+	if conn == nil {
+		logMsg("handleApplicationMessageWorker", "handleApplicationMessageWorker failed to start due to conn = nil.")
+		return
+	}
 	logMsg("handleApplicationMessageWorker", fmt.Sprintf("handleApplicationMessageWorker from %s is started", conn.RemoteAddr().String()))
+	defer conn.Close()
 
 	coverIp := conn.RemoteAddr().String()
 	decoder := gob.NewDecoder(conn)
@@ -284,7 +293,6 @@ func (node *Node) handleApplicationMessageWorker(conn net.Conn) {
 			msg := ApplicationMessage{}
 			err := decoder.Decode(&msg)
 			if err != nil {
-
 				doneErr <- err
 			} else {
 				doneSuccess <- msg
