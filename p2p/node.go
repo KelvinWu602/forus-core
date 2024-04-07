@@ -799,6 +799,7 @@ func (n *Node) handleConnectPathReq(conn net.Conn, content *ConnectPathReq) erro
 	shouldAcceptConnection := n.covers.getSize() < viper.GetInt("MAXIMUM_NUMBER_OF_COVER_NODES") && !alreadyMyCover
 
 	var connectPathResponse ConnectPathResp
+	var coverProfileKey string
 
 	if shouldAcceptConnection {
 		requestedPath, err := DecryptUUID(content.EncryptedTreeUUID, n.privateKey)
@@ -816,7 +817,8 @@ func (n *Node) handleConnectPathReq(conn net.Conn, content *ConnectPathReq) erro
 		secretKey := requesterKeyExchangeInfo.GetSymKey(*myKeyExchangeSecret)
 
 		// add incoming node as a cover node
-		n.covers.setValue(conn.RemoteAddr().String(), CoverNodeProfile{
+		coverProfileKey = conn.RemoteAddr().String()
+		n.covers.setValue(coverProfileKey, CoverNodeProfile{
 			cover:     conn.RemoteAddr().String(),
 			secretKey: secretKey,
 			treeUUID:  requestedPath,
@@ -840,7 +842,7 @@ func (n *Node) handleConnectPathReq(conn net.Conn, content *ConnectPathReq) erro
 	if shouldAcceptConnection {
 		// conn will be closed by handleApplicationMessageWorker
 		// If everything works, start a worker handling all incoming Application Messages(Real and Cover) from this cover node.
-		go n.handleApplicationMessageWorker(conn)
+		go n.handleApplicationMessageWorker(conn, coverProfileKey)
 	} else {
 		defer conn.Close()
 	}
