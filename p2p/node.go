@@ -248,7 +248,7 @@ func tcpSendAndWaitResponse[RESPONSE_TYPE any](reqBody *ProtocolMessage, destAdd
 
 	conn, err := net.Dial("tcp", addr)
 	defer func() {
-		if !keepAlive {
+		if !keepAlive && conn != nil {
 			conn.Close()
 		}
 	}()
