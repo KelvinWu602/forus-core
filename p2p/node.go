@@ -343,12 +343,14 @@ func (n *Node) sendVerifyCoverRequest(addr string, coverToBeVerified string) (*V
 }
 
 func (n *Node) sendConnectPathRequest(addr string, treeID uuid.UUID, n3X DHKeyExchange) (*ConnectPathResp, *net.Conn, error) {
-	targetPublicKey, found := n.peerPublicKeys.getValue(addr)
-	if !found {
-		_, _, err := n.QueryPath(addr)
+	targetPublicKey, foundPubKey := n.peerPublicKeys.getValue(addr)
+	_, foundHalfOpenPath := n.halfOpenPath.getValue(treeID)
+	if !foundPubKey || !foundHalfOpenPath {
+		_, verified, err := n.QueryPath(addr)
 		if err != nil {
 			return nil, nil, errors.New("public key of " + addr + " is unknown")
 		}
+		logMsg("sendConnectPathRequest", fmt.Sprintf("success QueryPath with verified paths = %v", verified))
 	}
 
 	encryptedTreeUUID, err := EncryptUUID(treeID, targetPublicKey)
