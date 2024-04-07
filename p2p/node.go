@@ -345,7 +345,10 @@ func (n *Node) sendVerifyCoverRequest(addr string, coverToBeVerified string) (*V
 func (n *Node) sendConnectPathRequest(addr string, treeID uuid.UUID, n3X DHKeyExchange) (*ConnectPathResp, *net.Conn, error) {
 	targetPublicKey, found := n.peerPublicKeys.getValue(addr)
 	if !found {
-		return nil, nil, errors.New("public key of " + addr + " is unknown")
+		_, _, err := n.QueryPath(addr)
+		if err != nil {
+			return nil, nil, errors.New("public key of " + addr + " is unknown")
+		}
 	}
 
 	encryptedTreeUUID, err := EncryptUUID(treeID, targetPublicKey)
@@ -1014,7 +1017,7 @@ func (n *Node) handleGetMessage(c *gin.Context) {
 	// operation
 	resp, err := n.isClient.Read(key)
 	if err != nil {
-		c.IndentedJSON(http.StatusNotFound, gin.H{"message": "message not found", "error": err})
+		c.IndentedJSON(http.StatusNotFound, gin.H{"message": "message not found", "error": err.Error()})
 		return
 	}
 	// response
@@ -1038,7 +1041,7 @@ func (n *Node) handlePostMessage(c *gin.Context) {
 	// read body param
 	var body HTTPPostMessageReq
 	if err := c.BindJSON(&body); err != nil {
-		c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "request body is invalid", "error": err})
+		c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "request body is invalid", "error": err.Error()})
 		return
 	}
 	if body.Content == nil || len(body.Content) == 0 {
@@ -1056,13 +1059,13 @@ func (n *Node) handlePostMessage(c *gin.Context) {
 		}
 		publishJobId, err = n.Publish(is.Key(key), body.Content, body.PathID)
 		if err != nil {
-			c.IndentedJSON(http.StatusInternalServerError, gin.H{"message": "publish error", "error": err})
+			c.IndentedJSON(http.StatusInternalServerError, gin.H{"message": "publish error", "error": err.Error()})
 			return
 		}
 	} else {
 		publishJobId, err = n.Publish(is.Key(key), body.Content, uuid.Nil)
 		if err != nil {
-			c.IndentedJSON(http.StatusInternalServerError, gin.H{"message": "publish error", "error": err})
+			c.IndentedJSON(http.StatusInternalServerError, gin.H{"message": "publish error", "error": err.Error()})
 			return
 		}
 	}
@@ -1087,7 +1090,7 @@ func (n *Node) handleGetPath(c *gin.Context) {
 	}
 	symKeyInByte, err := path.symKey.MarshalJSON()
 	if err != nil {
-		c.IndentedJSON(http.StatusInternalServerError, gin.H{"message": "failed to marshal symmetric_key", "error": err})
+		c.IndentedJSON(http.StatusInternalServerError, gin.H{"message": "failed to marshal symmetric_key", "error": err.Error()})
 		return
 	}
 	// response
@@ -1134,7 +1137,7 @@ func (n *Node) handlePostPath(c *gin.Context) {
 	// read body param
 	var body HTTPPostPathReq
 	if err := c.BindJSON(&body); err != nil {
-		c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "request body is invalid", "error": err})
+		c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "request body is invalid", "error": err.Error()})
 		return
 	}
 	// operation
@@ -1177,7 +1180,7 @@ func (n *Node) handlePostPath(c *gin.Context) {
 	}
 	symKeyInByte, err := path.symKey.MarshalJSON()
 	if err != nil {
-		c.IndentedJSON(http.StatusInternalServerError, gin.H{"message": "failed to marshal symmetric_key", "error": err})
+		c.IndentedJSON(http.StatusInternalServerError, gin.H{"message": "failed to marshal symmetric_key", "error": err.Error()})
 		return
 	}
 	// response
@@ -1229,7 +1232,7 @@ func (n *Node) handleGetMembers(c *gin.Context) {
 	// operation
 	resp, err := n.ndClient.GetMembers()
 	if err != nil {
-		c.IndentedJSON(http.StatusInternalServerError, gin.H{"message": "node-discovery get members error", "error": err})
+		c.IndentedJSON(http.StatusInternalServerError, gin.H{"message": "node-discovery get members error", "error": err.Error()})
 		return
 	}
 	c.IndentedJSON(http.StatusOK, resp.Member)
@@ -1251,7 +1254,7 @@ func (n *Node) handleGetCover(c *gin.Context) {
 	// response
 	symKeyInByte, err := cover.secretKey.MarshalJSON()
 	if err != nil {
-		c.IndentedJSON(http.StatusInternalServerError, gin.H{"message": "failed to marshal symmetric_key", "error": err})
+		c.IndentedJSON(http.StatusInternalServerError, gin.H{"message": "failed to marshal symmetric_key", "error": err.Error()})
 		return
 	}
 	c.IndentedJSON(http.StatusOK, HTTPSchemaCoverNode{
