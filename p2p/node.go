@@ -1233,7 +1233,13 @@ func (n *Node) handleGetPublishJob(c *gin.Context) {
 	// operation
 	job, found := n.publishJobs.getValue(publishJobID)
 	if !found {
-		c.IndentedJSON(http.StatusNotFound, gin.H{"message": "publish job not found"})
+		c.IndentedJSON(http.StatusNotFound, gin.H{
+			"message":                           "publish job not found",
+			"NUMBER_OF_COVER_NODES_FOR_PUBLISH": viper.GetInt("NUMBER_OF_COVER_NODES_FOR_PUBLISH"),
+			"TARGET_NUMBER_OF_CONNECTED_PATHS":  viper.GetInt("TARGET_NUMBER_OF_CONNECTED_PATHS"),
+			"number_of_covers":                  n.covers.getSize(),
+			"number_of_paths":                   n.paths.getSize(),
+		})
 		return
 	}
 	// response
