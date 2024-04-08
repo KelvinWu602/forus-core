@@ -2,6 +2,7 @@ package p2p
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -41,6 +42,30 @@ var byteArrayPlaceholder = []byte{101, 128, 51, 233, 51, 27, 130, 105, 168, 107,
 
 var uuidJsonStringPlaceholder = "c9ae5378-59ff-4dfd-a247-6031fe694e02"
 var uuidPlaceholder = uuid.MustParse("c9ae5378-59ff-4dfd-a247-6031fe694e02")
+
+func TestBase64Encoding(t *testing.T) {
+	assert := assert.New(t)
+	// json encoder is StdEncoded
+	jsonBuffer := bytes.NewBuffer([]byte{})
+	jsonEncoder := json.NewEncoder(jsonBuffer)
+	err := jsonEncoder.Encode(byteArrayPlaceholder)
+	assert.Equal(nil, err, "should be nil")
+
+	t.Logf("json encoded byte string: %v\n", jsonBuffer.String())
+
+	// with string "
+	jsonDecoder := json.NewDecoder(jsonBuffer)
+	var jsonDecodedString string
+
+	err = jsonDecoder.Decode(&jsonDecodedString)
+	assert.Equal(nil, err, "should be nil")
+
+	assert.Equal(byteArrayJsonStringPlaceholder, jsonDecodedString, "should be equal")
+
+	key, err := base64.StdEncoding.DecodeString(jsonDecodedString)
+	assert.Equal(nil, err, "should be nil")
+	assert.Equal(byteArrayPlaceholder, key, "should be equal")
+}
 
 func TestHTTPPostMessageReqWithoutPathId(t *testing.T) {
 	decoder := json.NewDecoder(strings.NewReader(jsonPostMessageReqWithoutPathId))
@@ -88,11 +113,11 @@ func TestHTTPPostPathReqEmpty(t *testing.T) {
 
 func TestHTTPSchemaMessage(t *testing.T) {
 	buffer := bytes.NewBuffer([]byte{})
-	decoder := json.NewEncoder(buffer)
+	encoder := json.NewEncoder(buffer)
 	message := HTTPSchemaMessage{
 		Content: byteArrayPlaceholder,
 	}
-	err := decoder.Encode(&message)
+	err := encoder.Encode(&message)
 	require.Equal(t, nil, err)
 	// check validness
 	encoded := buffer.String()

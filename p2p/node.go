@@ -1030,13 +1030,13 @@ func (n *Node) handleRealMessage(asymOutput []byte) error {
 func (n *Node) handleGetMessage(c *gin.Context) {
 	// read path param
 	keyBase64 := c.Param("key")
-	key, err := base64.StdEncoding.DecodeString(keyBase64)
+	key, err := base64.URLEncoding.DecodeString(keyBase64)
 	if err != nil {
-		c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "key should be base64 encoded string"})
+		c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "key should be base64 encoded string", "error": err.Error(), "input_key": keyBase64})
 		return
 	}
 	if len(key) != 48 {
-		c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "key length is not 48 bytes"})
+		c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "key length is not 48 bytes", "error": fmt.Sprintf("key length is %v bytes", len(key))})
 		return
 	}
 	// operation
@@ -1054,13 +1054,13 @@ func (n *Node) handleGetMessage(c *gin.Context) {
 func (n *Node) handlePostMessage(c *gin.Context) {
 	// read path param
 	keyBase64 := c.Param("key")
-	key, err := base64.StdEncoding.DecodeString(keyBase64)
+	key, err := base64.URLEncoding.DecodeString(keyBase64)
 	if err != nil {
-		c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "key should be base64 encoded string"})
+		c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "key should be base64 encoded string", "error": err.Error()})
 		return
 	}
 	if len(key) != 48 {
-		c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "key length is not 48 bytes"})
+		c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "key length is not 48 bytes", "error": fmt.Sprintf("key length is %v bytes", len(key))})
 		return
 	}
 	// read body param
@@ -1070,7 +1070,7 @@ func (n *Node) handlePostMessage(c *gin.Context) {
 		return
 	}
 	if body.Content == nil || len(body.Content) == 0 {
-		c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "content is invalid"})
+		c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "content is missing or empty"})
 		return
 	}
 	pathSpecified := body.PathID != uuid.Nil
