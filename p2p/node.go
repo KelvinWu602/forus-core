@@ -688,21 +688,35 @@ func (n *Node) Publish(key is.Key, message []byte, targetPathId uuid.UUID) (uuid
 			return uuid.Nil, errors.New("targetPathId does not exist")
 		}
 	}
-	conn, _ := n.openConnections.getValue(pathID)
+	// check if using self proxy path
+	if pathProfile.next == "ImmutableStorage" {
+		logMsg("Publish", fmt.Sprintf("key = %v, directly store in ImmutableStorage via path %v", key, pathID))
+		resp, err := n.isClient.Store(key, message)
+		if err != nil {
+			logError("Publish", err, fmt.Sprintf("Failed: key = %v, directly store in ImmutableStorage via path %v", key, pathID))
+			return uuid.Nil, errors.New("publish job picked self proxy path but failed to store to ImmutableStorage")
+		}
+		if !resp.Success {
+			logMsg("Publish", fmt.Sprintf("Received response with Success = false: key = %v, directly store in ImmutableStorage via path %v", key, pathID))
+			return uuid.Nil, errors.New("publish job picked self proxy path but failed to store to ImmutableStorage")
+		}
+	} else {
+		logMsg("Publish", fmt.Sprintf("key = %v, foward to next hop %v via path %v", key, pathProfile.next, pathID))
+		conn, _ := n.openConnections.getValue(pathID)
 
-	// 4) encrypt the data message to application message
-	dataMessage := DataMessage{Key: key, Content: message}
-	am, err := NewRealMessage(dataMessage, pathProfile.proxyPublic, pathProfile.symKey)
-	if err != nil {
-		return uuid.Nil, errors.New("encryption from data to application failed")
+		// 4) encrypt the data message to application message
+		dataMessage := DataMessage{Key: key, Content: message}
+		am, err := NewRealMessage(dataMessage, pathProfile.proxyPublic, pathProfile.symKey)
+		if err != nil {
+			return uuid.Nil, errors.New("encryption from data to application failed")
+		}
+
+		// 5) send the application message to the next hop
+		err = gob.NewEncoder(conn).Encode(am)
+		if err != nil {
+			return uuid.Nil, errors.New("error when sending tcp request")
+		}
 	}
-
-	// 5) send the application message to the next hop
-	err = gob.NewEncoder(conn).Encode(am)
-	if err != nil {
-		return uuid.Nil, errors.New("error when sending tcp request")
-	}
-
 	// 6) update the publishingJob map
 	newJobID := uuid.New()
 	n.publishJobs.setValue(newJobID, PublishJobProfile{Key: key[:], Status: PENDING, OnPath: pathProfile.uuid})

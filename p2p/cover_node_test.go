@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/KelvinWu602/immutable-storage/blueprint"
 	is "github.com/KelvinWu602/immutable-storage/protos"
+	"github.com/KelvinWu602/immutable-storage/server"
 	nd "github.com/KelvinWu602/node-discovery/protos"
 	"google.golang.org/grpc"
 )
@@ -39,26 +41,77 @@ func (s MockNodeDiscoveryServer) GetMembers(ctx context.Context, req *nd.GetMemb
 func (s MockNodeDiscoveryServer) mustEmbedUnimplementedNodeDiscoveryServer() {
 }
 
-// MockNodeDiscoveryServer implements node-discovery/protos/NodeDiscoveryServer interface
-type MockImmutableStorageServer struct {
-	is.UnimplementedImmutableStorageServer
+type message struct {
+	// uuid is the first 16 bytes of the message key, which can be random values.
+	uuid [16]byte
+	// checksum is a SHA256 hash of concat(uuid,payload).
+	checksum [32]byte
+	// payload is the actual message content stored by upper application.
+	payload []byte
 }
 
-func (s MockImmutableStorageServer) Store(context.Context, *is.StoreRequest) (*is.StoreResponse, error) {
-	return nil, nil
-}
-func (s MockImmutableStorageServer) Read(context.Context, *is.ReadRequest) (*is.ReadResponse, error) {
-	return nil, nil
-}
-func (s MockImmutableStorageServer) AvailableKeys(context.Context, *is.AvailableKeysRequest) (*is.AvailableKeysResponse, error) {
-	return nil, nil
-}
-func (s MockImmutableStorageServer) IsDiscovered(ctx context.Context, req *is.IsDiscoveredRequest) (*is.IsDiscoveredResponse, error) {
-	return &is.IsDiscoveredResponse{IsDiscovered: false}, nil
+type Mock struct {
+	cache map[blueprint.Key][]byte
 }
 
-func (s MockImmutableStorageServer) mustEmbedUnimplementedImmutableStorageServer() {
+func NewMock() *Mock {
+	var m Mock
+	m.cache = make(map[blueprint.Key][]byte)
+	return &m
 }
+
+func (m *Mock) Store(key blueprint.Key, message []byte) error {
+	if !blueprint.ValidateKey(key, message) {
+		return errors.New("invalid key")
+	}
+	m.cache[key] = message
+	return nil
+}
+
+func (m *Mock) Read(key blueprint.Key) ([]byte, error) {
+	msg, found := m.cache[key]
+	if found {
+		return msg[48:], nil
+	}
+	return nil, errors.New("not discovered")
+}
+
+func (m *Mock) AvailableKeys() []blueprint.Key {
+	result := make([]blueprint.Key, 0)
+	for key := range m.cache {
+		result = append(result, key)
+	}
+	return result
+}
+
+func (m *Mock) IsDiscovered(key blueprint.Key) bool {
+	_, discovered := m.cache[key]
+	return discovered
+}
+
+// // MockNodeDiscoveryServer implements node-discovery/protos/NodeDiscoveryServer interface
+// type MockImmutableStorageServer struct {
+// 	storage Mock
+// 	is.UnimplementedImmutableStorageServer
+// }
+
+// func (s MockImmutableStorageServer) Store(ctx context.Context, req *is.StoreRequest) (*is.StoreResponse, error) {
+// 	s.storage[[48]byte(req.Key)] = req.Content
+// 	return &is.StoreResponse{Success: true}, nil
+// }
+// func (s MockImmutableStorageServer) Read(context.Context, *is.ReadRequest) (*is.ReadResponse, error) {
+// 	if
+// 	return nil, nil
+// }
+// func (s MockImmutableStorageServer) AvailableKeys(context.Context, *is.AvailableKeysRequest) (*is.AvailableKeysResponse, error) {
+// 	return nil, nil
+// }
+// func (s MockImmutableStorageServer) IsDiscovered(ctx context.Context, req *is.IsDiscoveredRequest) (*is.IsDiscoveredResponse, error) {
+// 	return &is.IsDiscoveredResponse{IsDiscovered: false}, nil
+// }
+
+// func (s MockImmutableStorageServer) mustEmbedUnimplementedImmutableStorageServer() {
+// }
 
 func initNodeDiscoveryMockServer(t *testing.T) *grpc.Server {
 	lis, err := net.Listen("tcp", "localhost:3200")
@@ -66,7 +119,7 @@ func initNodeDiscoveryMockServer(t *testing.T) *grpc.Server {
 		t.Fatalf("error when init MockNodeDiscoveryServer: %s", err)
 	}
 	gs := grpc.NewServer()
-	var mockServer MockNodeDiscoveryServer
+	mockServer := MockNodeDiscoveryServer{}
 	nd.RegisterNodeDiscoveryServer(gs, mockServer)
 
 	go func() {
@@ -93,7 +146,8 @@ func initImmutableStorageMockServer(t *testing.T) *grpc.Server {
 		t.Fatalf("error when init MockImmutableStorageServer: %s", err)
 	}
 	gs := grpc.NewServer()
-	var mockServer MockImmutableStorageServer
+	mock := NewMock()
+	mockServer := server.NewApplicationServer(mock)
 	is.RegisterImmutableStorageServer(gs, mockServer)
 
 	go func() {
@@ -206,7 +260,6 @@ func TestPublish(t *testing.T) {
 		t.Fatal(resp2.StatusCode, resp2.Status, "get message wrong status code")
 	}
 	t.Log("get path success")
-
 }
 
 func TestValidateKey(t *testing.T) {
