@@ -19,6 +19,7 @@ func initConfigs() {
 	viper.SetDefault("MAINTAIN_PATHS_HEALTH_CHECKING_INTERVAL", 1*time.Minute)
 	viper.SetDefault("PUBLISH_CONDITION_CHECKING_INTERVAL", 1*time.Minute)
 	viper.SetDefault("FULFILL_PUBLISH_CONDITION_TIMEOUT", 5*time.Minute)
+	viper.SetDefault("FULFILL_PUBLISH_CONDITION_INTERVAL", 1*time.Second)
 	// int
 	viper.SetDefault("HALF_OPEN_PATH_BUFFER_SIZE", 10000)
 	viper.SetDefault("TARGET_NUMBER_OF_CONNECTED_PATHS", 3)
@@ -54,6 +55,7 @@ func initConfigs() {
 	viper.BindEnv("MAINTAIN_PATHS_HEALTH_CHECKING_INTERVAL")
 	viper.BindEnv("PUBLISH_CONDITION_CHECKING_INTERVAL")
 	viper.BindEnv("FULFILL_PUBLISH_CONDITION_TIMEOUT")
+	viper.BindEnv("FULFILL_PUBLISH_CONDITION_INTERVAL")
 	// int
 	viper.BindEnv("HALF_OPEN_PATH_BUFFER_SIZE")
 	viper.BindEnv("TARGET_NUMBER_OF_CONNECTED_PATHS")

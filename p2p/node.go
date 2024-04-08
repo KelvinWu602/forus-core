@@ -644,6 +644,7 @@ func (n *Node) fulfillPublishCondition() {
 		}()
 		select {
 		case <-done:
+			time.Sleep(viper.GetDuration("FULFILL_PUBLISH_CONDITION_INTERVAL"))
 			continue
 		case <-timeout:
 			logMsg("fulfillPublishCondition", "Iteration Timeout")
