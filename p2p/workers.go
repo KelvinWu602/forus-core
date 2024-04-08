@@ -11,7 +11,6 @@ import (
 	"golang.org/x/exp/slices"
 
 	"github.com/google/uuid"
-	"github.com/spf13/viper"
 )
 
 type PublishJobStatus uint
@@ -62,8 +61,8 @@ func (node *Node) blacklistPathIDs() []uuid.UUID {
 	// for every path, check if FailureCount > failureThreshold
 	results := []uuid.UUID{}
 	node.paths.iterate(func(pathID uuid.UUID, path PathProfile) {
-		if path.failureCount >= viper.GetInt("MOVE_UP_REQUIREMENT_FAILURE_THRESHOLD") {
-			logMsg("blacklistPathIDs", fmt.Sprintf("Blacklist Path %v: failureCount = %v > %v = threshold", pathID, path.failureCount, viper.GetInt("MOVE_UP_REQUIREMENT_FAILURE_THRESHOLD")))
+		if path.failureCount >= node.v.GetInt("MOVE_UP_REQUIREMENT_FAILURE_THRESHOLD") {
+			logMsg("blacklistPathIDs", fmt.Sprintf("Blacklist Path %v: failureCount = %v > %v = threshold", pathID, path.failureCount, node.v.GetInt("MOVE_UP_REQUIREMENT_FAILURE_THRESHOLD")))
 			results = append(results, pathID)
 		}
 	}, false)
@@ -120,10 +119,10 @@ func (node *Node) invalidPathProfiles() []InvalidPathProfile {
 
 func (node *Node) canPublish(lock bool) bool {
 	if lock {
-		return node.covers.getSize() >= viper.GetInt("NUMBER_OF_COVER_NODES_FOR_PUBLISH") &&
+		return node.covers.getSize() >= node.v.GetInt("NUMBER_OF_COVER_NODES_FOR_PUBLISH") &&
 			node.paths.getSize() > 0
 	}
-	return len(node.covers.data) >= viper.GetInt("NUMBER_OF_COVER_NODES_FOR_PUBLISH") &&
+	return len(node.covers.data) >= node.v.GetInt("NUMBER_OF_COVER_NODES_FOR_PUBLISH") &&
 		len(node.paths.data) > 0
 }
 
@@ -135,8 +134,8 @@ func (node *Node) checkPublishJobStatusWorker(jobID uuid.UUID) {
 
 	logMsg("checkPublishJobStatusWorker", fmt.Sprintf("Started, JobID: %v", jobID.String()))
 
-	timeout := viper.GetDuration("PUBLISH_JOB_FAILED_TIMEOUT")
-	checkInterval := viper.GetDuration("PUBLISH_JOB_CHECKING_INTERVAL")
+	timeout := node.v.GetDuration("PUBLISH_JOB_FAILED_TIMEOUT")
+	checkInterval := node.v.GetDuration("PUBLISH_JOB_CHECKING_INTERVAL")
 
 	// check if the job really exists
 	publishJobProfile, jobExists := node.publishJobs.getValue(jobID)
@@ -180,7 +179,7 @@ func (node *Node) checkPublishJobStatusWorker(jobID uuid.UUID) {
 
 func (node *Node) maintainPathsHealthWorker() {
 
-	logMsg("maintainPathsHealthWorker", fmt.Sprintf("Started, sleep interval = %v", viper.GetDuration("MAINTAIN_PATHS_HEALTH_CHECKING_INTERVAL")))
+	logMsg("maintainPathsHealthWorker", fmt.Sprintf("Started, sleep interval = %v", node.v.GetDuration("MAINTAIN_PATHS_HEALTH_CHECKING_INTERVAL")))
 
 	var moveUpWg sync.WaitGroup
 	var fixPathWg sync.WaitGroup
@@ -215,13 +214,13 @@ func (node *Node) maintainPathsHealthWorker() {
 		fixPathWg.Wait()
 		logMsg("maintainPathsHealthWorker", "Invalid Paths Check Done")
 		logMsg("maintainPathsHealthWorker", "Iteration Ends")
-		time.Sleep(viper.GetDuration("MAINTAIN_PATHS_HEALTH_CHECKING_INTERVAL"))
+		time.Sleep(node.v.GetDuration("MAINTAIN_PATHS_HEALTH_CHECKING_INTERVAL"))
 	}
 }
 
 func (node *Node) checkPublishConditionWorker() {
 
-	logMsg("checkPublishConditionWorker", fmt.Sprintf("Started, sleep interval = %v", viper.GetDuration("PUBLISH_CONDITION_CHECKING_INTERVAL")))
+	logMsg("checkPublishConditionWorker", fmt.Sprintf("Started, sleep interval = %v", node.v.GetDuration("PUBLISH_CONDITION_CHECKING_INTERVAL")))
 
 	for {
 
@@ -229,7 +228,7 @@ func (node *Node) checkPublishConditionWorker() {
 			node.fulfillPublishCondition()
 		}
 
-		time.Sleep(viper.GetDuration("PUBLISH_CONDITION_CHECKING_INTERVAL"))
+		time.Sleep(node.v.GetDuration("PUBLISH_CONDITION_CHECKING_INTERVAL"))
 	}
 
 }
@@ -275,9 +274,9 @@ func (node *Node) sendCoverMessageWorker(connProfile *TCPConnectionProfile, path
 			return
 		case <-doneSuccess:
 			// postpone tcp connection deadline
-			(*connProfile.Conn).SetDeadline(time.Now().Add(viper.GetDuration("COVER_MESSAGE_SENDING_INTERVAL")).Add(time.Minute))
+			(*connProfile.Conn).SetDeadline(time.Now().Add(node.v.GetDuration("COVER_MESSAGE_SENDING_INTERVAL")).Add(time.Minute))
 			logMsg("sendCoverMessageWorker", fmt.Sprintf("cover message to %s on path %v is sent successfully.", conn.RemoteAddr().String(), pathID.String()))
-			time.Sleep(viper.GetDuration("COVER_MESSAGE_SENDING_INTERVAL"))
+			time.Sleep(node.v.GetDuration("COVER_MESSAGE_SENDING_INTERVAL"))
 		}
 	}
 }
@@ -310,7 +309,7 @@ func (node *Node) handleApplicationMessageWorker(conn net.Conn, coverProfileKey 
 
 		select {
 		case msg := <-doneSuccess:
-			conn.SetDeadline(time.Now().Add(viper.GetDuration("APPLICATION_MESSAGE_RECEIVING_INTERVAL")).Add(time.Minute))
+			conn.SetDeadline(time.Now().Add(node.v.GetDuration("APPLICATION_MESSAGE_RECEIVING_INTERVAL")).Add(time.Minute))
 
 			coverProfile, found := node.covers.getValue(coverIp)
 			if !found {
@@ -330,7 +329,7 @@ func (node *Node) handleApplicationMessageWorker(conn net.Conn, coverProfileKey 
 		case err := <-doneErr:
 			logError("handleApplicationMessageWorker", err, fmt.Sprintf("error when receiving application message from %s", conn.RemoteAddr().String()))
 			return
-		case <-time.After(viper.GetDuration("APPLICATION_MESSAGE_RECEIVING_INTERVAL")):
+		case <-time.After(node.v.GetDuration("APPLICATION_MESSAGE_RECEIVING_INTERVAL")):
 			logMsg("handleApplicationMessageWorker", fmt.Sprintf("handleApplicationMessageWorker from %s: COVER MESSAGE TIMEOUT.\n", conn.RemoteAddr().String()))
 			return
 		}

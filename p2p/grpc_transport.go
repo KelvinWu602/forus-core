@@ -22,8 +22,8 @@ type ImmutableStorageClient struct {
 	client isProtos.ImmutableStorageClient
 }
 
-func (nc *NodeDiscoveryClient) New() error {
-	addr := "localhost" + viper.GetString("NODE_DISCOVERY_SERVER_LISTEN_PORT")
+func (nc *NodeDiscoveryClient) New(v *viper.Viper) error {
+	addr := "localhost" + v.GetString("NODE_DISCOVERY_SERVER_LISTEN_PORT")
 	conn, err := grpc.Dial(addr, grpc.WithInsecure(), grpc.WithBlock())
 	if err != nil {
 		log.Printf("Cannot connect to Node Discovery: %s \n", err)
@@ -51,8 +51,8 @@ func (nc *NodeDiscoveryClient) GetMembers() (*ndProtos.GetMembersReponse, error)
 	return nc.client.GetMembers(ctx, &ndProtos.GetMembersRequest{})
 }
 
-func (ic *ImmutableStorageClient) New() error {
-	addr := "localhost" + viper.GetString("IMMUTABLE_STORAGE_SERVER_LISTEN_PORT")
+func (ic *ImmutableStorageClient) New(v *viper.Viper) error {
+	addr := "localhost" + v.GetString("IMMUTABLE_STORAGE_SERVER_LISTEN_PORT")
 	conn, err := grpc.Dial(addr, grpc.WithInsecure(), grpc.WithBlock())
 	if err != nil {
 		log.Printf("Cannot connect to Immutable Storage: %s \n", err)
@@ -86,27 +86,27 @@ func (ic *ImmutableStorageClient) IsDiscovered(key []byte) (*isProtos.IsDiscover
 	return ic.client.IsDiscovered(ctx, &isProtos.IsDiscoveredRequest{Key: key})
 }
 
-func initNodeDiscoverClient() *NodeDiscoveryClient {
+func initNodeDiscoverClient(v *viper.Viper) *NodeDiscoveryClient {
 	logMsg("initNodeDiscoverClient", "connecting to Node-Discovery...")
 	nd := &NodeDiscoveryClient{}
-	err := nd.New()
+	err := nd.New(v)
 	for err != nil {
 		logError("initNodeDiscoverClient", err, "Retry connect to Node-Discovery after 1 second...")
 		time.Sleep(time.Second)
-		err = nd.New()
+		err = nd.New(v)
 	}
 	logMsg("initNodeDiscoverClient", "connected to Node-Discovery Successfully")
 	return nd
 }
 
-func initImmutableStorageClient() *ImmutableStorageClient {
+func initImmutableStorageClient(v *viper.Viper) *ImmutableStorageClient {
 	logMsg("initImmutableStorageClient", "connecting to Immutable-Storage...")
 	is := &ImmutableStorageClient{}
-	err := is.New()
+	err := is.New(v)
 	for err != nil {
 		logError("initImmutableStorageClient", err, "Retry connect to Immutable-Storage after 1 second...")
 		time.Sleep(time.Second)
-		err = is.New()
+		err = is.New(v)
 	}
 	logMsg("initNodeDiscoverClient", "connected to Immutable-Storage Successfully")
 	return is

@@ -36,13 +36,25 @@ type Node struct {
 	// grpc member
 	ndClient *NodeDiscoveryClient
 	isClient *ImmutableStorageClient
+
+	// configs
+	v *viper.Viper
 }
 
 func StartNode() {
-	initConfigs()
+	StartNodeInternal("config.yaml")
+
+	terminate := make(chan os.Signal, 1)
+	signal.Notify(terminate, os.Interrupt, syscall.SIGTERM)
+	// wait for the SIGINT signal (Ctrl+C)
+	<-terminate
+}
+
+func StartNodeInternal(configPath string) *Node {
+	v := initConfigs(configPath)
 	initGobTypeRegistration()
-	node := NewNode()
-	node.initDependencies()
+	node := NewNode(v)
+	node.initDependencies(v)
 
 	defer func() {
 		node.ndClient.LeaveCluster()
@@ -57,15 +69,12 @@ func StartNode() {
 	go node.checkPublishConditionWorker()
 	go node.maintainPathsHealthWorker()
 
-	terminate := make(chan os.Signal, 1)
-	signal.Notify(terminate, os.Interrupt, syscall.SIGTERM)
-	// wait for the SIGINT signal (Ctrl+C)
-	<-terminate
+	return node
 }
 
 // New() creates a new node
 // This should only be called once for every core
-func NewNode() *Node {
+func NewNode(v *viper.Viper) *Node {
 	// Generate Asymmetric Key Pair
 	public, private, err := GenerateAsymmetricKeyPair()
 	if err != nil {
@@ -85,6 +94,8 @@ func NewNode() *Node {
 
 		ndClient: nil,
 		isClient: nil,
+
+		v: v,
 	}
 	return self
 }
@@ -94,18 +105,18 @@ func NewNode() *Node {
 // 2) ImmutableStorage grpc server  :  localhost:3100
 //
 // This is a blocking procedure and it will retry infinitely on error
-func (n *Node) initDependencies() {
+func (n *Node) initDependencies(v *viper.Viper) {
 	logMsg("initDependencies", "setting up dependencies...")
-	n.ndClient = initNodeDiscoverClient()
-	n.isClient = initImmutableStorageClient()
+	n.ndClient = initNodeDiscoverClient(v)
+	n.isClient = initImmutableStorageClient(v)
 	logMsg("initDependencies", "completed dependencies setups")
 
 }
 
 func (n *Node) joinCluster() {
-	if viper.IsSet("CLUSTER_CONTACT_NODE_IP") {
+	if n.v.IsSet("CLUSTER_CONTACT_NODE_IP") {
 		logMsg("StartNode", "CLUSTER_CONTACT_NODE_IP is set. Calling ndClient.JoinCluster().")
-		_, err := n.ndClient.JoinCluster(viper.GetString("CLUSTER_CONTACT_NODE_IP"))
+		_, err := n.ndClient.JoinCluster(n.v.GetString("CLUSTER_CONTACT_NODE_IP"))
 		if err != nil {
 			logError("StartNode", err, "ndClient.JoinCluster error.")
 			os.Exit(1)
@@ -118,8 +129,8 @@ func (n *Node) joinCluster() {
 func (n *Node) StartHTTP() {
 	// Start HTTP server for web client
 	// in production, should bind to only localhost, otherwise others may be able to retrieve sensitive information of this node
-	bindAllIP := viper.GetBool("TESTING_FLAG")
-	httpPort := viper.GetString("HTTP_SERVER_LISTEN_PORT")
+	bindAllIP := n.v.GetBool("TESTING_FLAG")
+	httpPort := n.v.GetString("HTTP_SERVER_LISTEN_PORT")
 	var addr string
 	if bindAllIP {
 		addr = httpPort
@@ -153,7 +164,7 @@ func (n *Node) StartHTTP() {
 
 // StartTCP() starts the internode communicating TCP
 func (n *Node) StartTCP() {
-	tcpPort := viper.GetString("TCP_SERVER_LISTEN_PORT")
+	tcpPort := n.v.GetString("TCP_SERVER_LISTEN_PORT")
 	logMsg("StartTCP", fmt.Sprintf("setting up TCP server at %v", tcpPort))
 
 	listener, err := net.Listen("tcp", tcpPort)
@@ -244,7 +255,7 @@ func initGobTypeRegistration() {
 // A generic function used to send tcp requests and wait for response with a timeout.
 // destAddr can contain only IP address: TCP_SERVER_LISTEN_PORT will be appended as dest port
 // destAddr can contain full address, i.e. IP and Port: will directly use the full address
-func tcpSendAndWaitResponse[RESPONSE_TYPE any](reqBody *ProtocolMessage, destAddr string, keepAlive bool) (*RESPONSE_TYPE, *TCPConnectionProfile, error) {
+func tcpSendAndWaitResponse[RESPONSE_TYPE any](reqBody *ProtocolMessage, destAddr string, keepAlive bool, v *viper.Viper) (*RESPONSE_TYPE, *TCPConnectionProfile, error) {
 	logMsg("tcpSendAndWaitResponse", fmt.Sprintf("reqBody = %v, destAddr = %v, keepAlive = %v", reqBody, destAddr, keepAlive))
 
 	var addr string
@@ -252,7 +263,7 @@ func tcpSendAndWaitResponse[RESPONSE_TYPE any](reqBody *ProtocolMessage, destAdd
 	_, _, err := net.SplitHostPort(destAddr)
 	if err != nil {
 		// destAddr in form <IP>
-		addr = destAddr + viper.GetString("TCP_SERVER_LISTEN_PORT")
+		addr = destAddr + v.GetString("TCP_SERVER_LISTEN_PORT")
 	} else {
 		// destAddr in form <IP>:<Port>
 		addr = destAddr
@@ -276,7 +287,7 @@ func tcpSendAndWaitResponse[RESPONSE_TYPE any](reqBody *ProtocolMessage, destAdd
 		return nil, nil, err
 	}
 
-	response, err := waitForResponse[RESPONSE_TYPE](conn)
+	response, err := waitForResponse[RESPONSE_TYPE](conn, v)
 	if err != nil {
 		logError("tcpSendAndWaitResponse", err, fmt.Sprintf("error at waitForResponse[RESPONSE_TYPE](conn) where conn.RemoteAddr().String() = %v", conn.RemoteAddr().String()))
 		return nil, nil, err
@@ -285,7 +296,7 @@ func tcpSendAndWaitResponse[RESPONSE_TYPE any](reqBody *ProtocolMessage, destAdd
 }
 
 // A generic function used to wait for tcp response.
-func waitForResponse[RESPONSE_TYPE any](conn net.Conn) (*RESPONSE_TYPE, error) {
+func waitForResponse[RESPONSE_TYPE any](conn net.Conn, v *viper.Viper) (*RESPONSE_TYPE, error) {
 	errTimeout := errors.New("tcp request timeout")
 
 	doneSuccess := make(chan RESPONSE_TYPE)
@@ -305,7 +316,7 @@ func waitForResponse[RESPONSE_TYPE any](conn net.Conn) (*RESPONSE_TYPE, error) {
 		return &resp, nil
 	case err := <-doneError:
 		return nil, err
-	case <-time.After(viper.GetDuration("TCP_REQUEST_TIMEOUT")):
+	case <-time.After(v.GetDuration("TCP_REQUEST_TIMEOUT")):
 		return nil, errTimeout
 	}
 }
@@ -328,7 +339,7 @@ func (n *Node) sendQueryPathRequest(addr string) (*QueryPathResp, error) {
 		Type:    QueryPathRequest,
 		Content: serialized,
 	}
-	resp, _, err := tcpSendAndWaitResponse[QueryPathResp](&queryPathRequest, addr, false)
+	resp, _, err := tcpSendAndWaitResponse[QueryPathResp](&queryPathRequest, addr, false, n.v)
 	return resp, err
 }
 
@@ -343,7 +354,7 @@ func (n *Node) sendVerifyCoverRequest(addr string, coverToBeVerified string) (*V
 		Type:    VerifyCoverRequest,
 		Content: serialized,
 	}
-	resp, _, err := tcpSendAndWaitResponse[VerifyCoverResp](&verifyCoverRequest, addr, false)
+	resp, _, err := tcpSendAndWaitResponse[VerifyCoverResp](&verifyCoverRequest, addr, false, n.v)
 	return resp, err
 }
 
@@ -378,7 +389,7 @@ func (n *Node) sendConnectPathRequest(addr string, treeID uuid.UUID, n3X DHKeyEx
 	}
 
 	logMsg("sendConnectPathRequest", fmt.Sprintf("success constructed Protocol Message = %v", connectPathReq))
-	return tcpSendAndWaitResponse[ConnectPathResp](&connectPathReq, addr, true)
+	return tcpSendAndWaitResponse[ConnectPathResp](&connectPathReq, addr, true, n.v)
 }
 
 // request a proxy triggered by empty path in pathResp
@@ -395,7 +406,7 @@ func (n *Node) sendCreateProxyRequest(addr string, n3X DHKeyExchange) (*CreatePr
 		Content: serialized,
 	}
 
-	return tcpSendAndWaitResponse[CreateProxyResp](&createProxyRequest, addr, true)
+	return tcpSendAndWaitResponse[CreateProxyResp](&createProxyRequest, addr, true, n.v)
 }
 
 // ACTIONS function, including:
@@ -636,9 +647,9 @@ func (n *Node) fulfillPublishCondition() {
 	}
 	done := make(chan bool)
 
-	timeout := time.After(viper.GetDuration("FULFILL_PUBLISH_CONDITION_TIMEOUT"))
+	timeout := time.After(n.v.GetDuration("FULFILL_PUBLISH_CONDITION_TIMEOUT"))
 
-	for n.paths.getSize() < viper.GetInt("TARGET_NUMBER_OF_CONNECTED_PATHS") {
+	for n.paths.getSize() < n.v.GetInt("TARGET_NUMBER_OF_CONNECTED_PATHS") {
 		go func() {
 			peerChoice := rand.Intn(clusterSize)
 			// addr can be in both <IP> or <IP>:<Port> format
@@ -662,7 +673,7 @@ func (n *Node) fulfillPublishCondition() {
 		}()
 		select {
 		case <-done:
-			time.Sleep(viper.GetDuration("FULFILL_PUBLISH_CONDITION_INTERVAL"))
+			time.Sleep(n.v.GetDuration("FULFILL_PUBLISH_CONDITION_INTERVAL"))
 			continue
 		case <-timeout:
 			logMsg("fulfillPublishCondition", "Iteration Timeout")
@@ -860,7 +871,7 @@ func (n *Node) handleConnectPathReq(conn net.Conn, content *ConnectPathReq) erro
 	}
 	// check number of cover nodes
 	_, alreadyMyCover := n.covers.getValue(conn.RemoteAddr().String())
-	shouldAcceptConnection := n.covers.getSize() < viper.GetInt("MAXIMUM_NUMBER_OF_COVER_NODES") && !alreadyMyCover
+	shouldAcceptConnection := n.covers.getSize() < n.v.GetInt("MAXIMUM_NUMBER_OF_COVER_NODES") && !alreadyMyCover
 
 	var connectPathResponse ConnectPathResp
 	var coverProfileKey string
@@ -922,7 +933,7 @@ func (n *Node) handleCreateProxyReq(conn net.Conn, content *CreateProxyReq) erro
 	}
 	// check number of cover nodes
 	_, alreadyMyCover := n.covers.getValue(conn.RemoteAddr().String())
-	shouldAcceptConnection := n.covers.getSize() < viper.GetInt("MAXIMUM_NUMBER_OF_COVER_NODES") && !alreadyMyCover
+	shouldAcceptConnection := n.covers.getSize() < n.v.GetInt("MAXIMUM_NUMBER_OF_COVER_NODES") && !alreadyMyCover
 
 	var createProxyResponse CreateProxyResp
 	var coverProfileKey string
@@ -1139,8 +1150,8 @@ func (n *Node) handlePostMessage(c *gin.Context) {
 			c.IndentedJSON(http.StatusInternalServerError, gin.H{
 				"message":                           "publish error",
 				"error":                             err.Error(),
-				"NUMBER_OF_COVER_NODES_FOR_PUBLISH": viper.GetInt("NUMBER_OF_COVER_NODES_FOR_PUBLISH"),
-				"TARGET_NUMBER_OF_CONNECTED_PATHS":  viper.GetInt("TARGET_NUMBER_OF_CONNECTED_PATHS"),
+				"NUMBER_OF_COVER_NODES_FOR_PUBLISH": n.v.GetInt("NUMBER_OF_COVER_NODES_FOR_PUBLISH"),
+				"TARGET_NUMBER_OF_CONNECTED_PATHS":  n.v.GetInt("TARGET_NUMBER_OF_CONNECTED_PATHS"),
 				"number_of_covers":                  n.covers.getSize(),
 				"number_of_paths":                   n.paths.getSize(),
 			})
@@ -1152,8 +1163,8 @@ func (n *Node) handlePostMessage(c *gin.Context) {
 			c.IndentedJSON(http.StatusInternalServerError, gin.H{
 				"message":                           "publish error",
 				"error":                             err.Error(),
-				"NUMBER_OF_COVER_NODES_FOR_PUBLISH": viper.GetInt("NUMBER_OF_COVER_NODES_FOR_PUBLISH"),
-				"TARGET_NUMBER_OF_CONNECTED_PATHS":  viper.GetInt("TARGET_NUMBER_OF_CONNECTED_PATHS"),
+				"NUMBER_OF_COVER_NODES_FOR_PUBLISH": n.v.GetInt("NUMBER_OF_COVER_NODES_FOR_PUBLISH"),
+				"TARGET_NUMBER_OF_CONNECTED_PATHS":  n.v.GetInt("TARGET_NUMBER_OF_CONNECTED_PATHS"),
 				"number_of_covers":                  n.covers.getSize(),
 				"number_of_paths":                   n.paths.getSize(),
 			})
@@ -1237,7 +1248,7 @@ func (n *Node) handlePostPath(c *gin.Context) {
 		// Connect Path
 		addr := body.IP
 		if len(body.Port) > 0 {
-			addr += body.Port
+			addr += ":" + body.Port
 		}
 		resp, err := n.ConnectPath(addr, body.PathID)
 		if err != nil {
@@ -1384,28 +1395,28 @@ func (n *Node) handleGetConfigs(c *gin.Context) {
 	// response
 	c.IndentedJSON(http.StatusOK, gin.H{
 		// time
-		"COVER_MESSAGE_SENDING_INTERVAL":          viper.GetDuration("COVER_MESSAGE_SENDING_INTERVAL"),
-		"APPLICATION_MESSAGE_RECEIVING_INTERVAL":  viper.GetDuration("APPLICATION_MESSAGE_RECEIVING_INTERVAL"),
-		"PUBLISH_JOB_FAILED_TIMEOUT":              viper.GetDuration("PUBLISH_JOB_FAILED_TIMEOUT"),
-		"PUBLISH_JOB_CHECKING_INTERVAL":           viper.GetDuration("PUBLISH_JOB_CHECKING_INTERVAL"),
-		"TCP_REQUEST_TIMEOUT":                     viper.GetDuration("TCP_REQUEST_TIMEOUT"),
-		"MAINTAIN_PATHS_HEALTH_CHECKING_INTERVAL": viper.GetDuration("MAINTAIN_PATHS_HEALTH_CHECKING_INTERVAL"),
-		"PUBLISH_CONDITION_CHECKING_INTERVAL":     viper.GetDuration("PUBLISH_CONDITION_CHECKING_INTERVAL"),
-		"FULFILL_PUBLISH_CONDITION_TIMEOUT":       viper.GetDuration("FULFILL_PUBLISH_CONDITION_TIMEOUT"),
-		"FULFILL_PUBLISH_CONDITION_INTERVAL":      viper.GetDuration("FULFILL_PUBLISH_CONDITION_INTERVAL"),
+		"COVER_MESSAGE_SENDING_INTERVAL":          n.v.GetDuration("COVER_MESSAGE_SENDING_INTERVAL"),
+		"APPLICATION_MESSAGE_RECEIVING_INTERVAL":  n.v.GetDuration("APPLICATION_MESSAGE_RECEIVING_INTERVAL"),
+		"PUBLISH_JOB_FAILED_TIMEOUT":              n.v.GetDuration("PUBLISH_JOB_FAILED_TIMEOUT"),
+		"PUBLISH_JOB_CHECKING_INTERVAL":           n.v.GetDuration("PUBLISH_JOB_CHECKING_INTERVAL"),
+		"TCP_REQUEST_TIMEOUT":                     n.v.GetDuration("TCP_REQUEST_TIMEOUT"),
+		"MAINTAIN_PATHS_HEALTH_CHECKING_INTERVAL": n.v.GetDuration("MAINTAIN_PATHS_HEALTH_CHECKING_INTERVAL"),
+		"PUBLISH_CONDITION_CHECKING_INTERVAL":     n.v.GetDuration("PUBLISH_CONDITION_CHECKING_INTERVAL"),
+		"FULFILL_PUBLISH_CONDITION_TIMEOUT":       n.v.GetDuration("FULFILL_PUBLISH_CONDITION_TIMEOUT"),
+		"FULFILL_PUBLISH_CONDITION_INTERVAL":      n.v.GetDuration("FULFILL_PUBLISH_CONDITION_INTERVAL"),
 		// int
-		"HALF_OPEN_PATH_BUFFER_SIZE":            viper.GetInt("HALF_OPEN_PATH_BUFFER_SIZE"),
-		"TARGET_NUMBER_OF_CONNECTED_PATHS":      viper.GetInt("TARGET_NUMBER_OF_CONNECTED_PATHS"),
-		"MAXIMUM_NUMBER_OF_COVER_NODES":         viper.GetInt("MAXIMUM_NUMBER_OF_COVER_NODES"),
-		"NUMBER_OF_COVER_NODES_FOR_PUBLISH":     viper.GetInt("NUMBER_OF_COVER_NODES_FOR_PUBLISH"),
-		"MOVE_UP_REQUIREMENT_FAILURE_THRESHOLD": viper.GetInt("MOVE_UP_REQUIREMENT_FAILURE_THRESHOLD"),
+		"HALF_OPEN_PATH_BUFFER_SIZE":            n.v.GetInt("HALF_OPEN_PATH_BUFFER_SIZE"),
+		"TARGET_NUMBER_OF_CONNECTED_PATHS":      n.v.GetInt("TARGET_NUMBER_OF_CONNECTED_PATHS"),
+		"MAXIMUM_NUMBER_OF_COVER_NODES":         n.v.GetInt("MAXIMUM_NUMBER_OF_COVER_NODES"),
+		"NUMBER_OF_COVER_NODES_FOR_PUBLISH":     n.v.GetInt("NUMBER_OF_COVER_NODES_FOR_PUBLISH"),
+		"MOVE_UP_REQUIREMENT_FAILURE_THRESHOLD": n.v.GetInt("MOVE_UP_REQUIREMENT_FAILURE_THRESHOLD"),
 		// string
-		"TCP_SERVER_LISTEN_PORT":               viper.GetString("TCP_SERVER_LISTEN_PORT"),
-		"HTTP_SERVER_LISTEN_PORT":              viper.GetString("HTTP_SERVER_LISTEN_PORT"),
-		"NODE_DISCOVERY_SERVER_LISTEN_PORT":    viper.GetString("NODE_DISCOVERY_SERVER_LISTEN_PORT"),
-		"IMMUTABLE_STORAGE_SERVER_LISTEN_PORT": viper.GetString("IMMUTABLE_STORAGE_SERVER_LISTEN_PORT"),
-		"CLUSTER_CONTACT_NODE_IP":              viper.GetString("CLUSTER_CONTACT_NODE_IP"),
+		"TCP_SERVER_LISTEN_PORT":               n.v.GetString("TCP_SERVER_LISTEN_PORT"),
+		"HTTP_SERVER_LISTEN_PORT":              n.v.GetString("HTTP_SERVER_LISTEN_PORT"),
+		"NODE_DISCOVERY_SERVER_LISTEN_PORT":    n.v.GetString("NODE_DISCOVERY_SERVER_LISTEN_PORT"),
+		"IMMUTABLE_STORAGE_SERVER_LISTEN_PORT": n.v.GetString("IMMUTABLE_STORAGE_SERVER_LISTEN_PORT"),
+		"CLUSTER_CONTACT_NODE_IP":              n.v.GetString("CLUSTER_CONTACT_NODE_IP"),
 		// bool
-		"TESTING_FLAG": viper.GetBool("TESTING_FLAG"),
+		"TESTING_FLAG": n.v.GetBool("TESTING_FLAG"),
 	})
 }
