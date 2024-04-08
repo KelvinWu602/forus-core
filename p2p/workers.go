@@ -113,10 +113,10 @@ func (node *Node) invalidPathProfiles() []InvalidPathProfile {
 func (node *Node) canPublish(lock bool) bool {
 	if lock {
 		return node.covers.getSize() >= viper.GetInt("NUMBER_OF_COVER_NODES_FOR_PUBLISH") &&
-			node.paths.getSize() >= viper.GetInt("TARGET_NUMBER_OF_CONNECTED_PATHS")
+			node.paths.getSize() > 0
 	}
 	return len(node.covers.data) >= viper.GetInt("NUMBER_OF_COVER_NODES_FOR_PUBLISH") &&
-		len(node.paths.data) >= viper.GetInt("TARGET_NUMBER_OF_CONNECTED_PATHS")
+		len(node.paths.data) > 0
 }
 
 // workers

@@ -666,12 +666,13 @@ func (n *Node) Publish(key is.Key, message []byte, targetPathId uuid.UUID) (uuid
 	defer n.covers.lock.Unlock()
 	defer n.paths.lock.Unlock()
 	// without locking paths and covers, check canPublish
-	if n.canPublish(false) {
+	if !n.canPublish(false) {
 		return uuid.Nil, errors.New("publishing condition not met")
 	}
 	// 2) Validate the key
 	isValdiated := is.ValidateKey(key, message)
 	if !isValdiated {
+		logMsg("Publish.ValidateKey", fmt.Sprintf("key: %v, message: %v", key, message))
 		return uuid.Nil, errors.New("key not valid")
 	}
 	// 3) Pick a path
@@ -1084,13 +1085,27 @@ func (n *Node) handlePostMessage(c *gin.Context) {
 		}
 		publishJobId, err = n.Publish(is.Key(key), body.Content, body.PathID)
 		if err != nil {
-			c.IndentedJSON(http.StatusInternalServerError, gin.H{"message": "publish error", "error": err.Error()})
+			c.IndentedJSON(http.StatusInternalServerError, gin.H{
+				"message":                           "publish error",
+				"error":                             err.Error(),
+				"NUMBER_OF_COVER_NODES_FOR_PUBLISH": viper.GetInt("NUMBER_OF_COVER_NODES_FOR_PUBLISH"),
+				"TARGET_NUMBER_OF_CONNECTED_PATHS":  viper.GetInt("TARGET_NUMBER_OF_CONNECTED_PATHS"),
+				"number_of_covers":                  n.covers.getSize(),
+				"number_of_paths":                   n.paths.getSize(),
+			})
 			return
 		}
 	} else {
 		publishJobId, err = n.Publish(is.Key(key), body.Content, uuid.Nil)
 		if err != nil {
-			c.IndentedJSON(http.StatusInternalServerError, gin.H{"message": "publish error", "error": err.Error()})
+			c.IndentedJSON(http.StatusInternalServerError, gin.H{
+				"message":                           "publish error",
+				"error":                             err.Error(),
+				"NUMBER_OF_COVER_NODES_FOR_PUBLISH": viper.GetInt("NUMBER_OF_COVER_NODES_FOR_PUBLISH"),
+				"TARGET_NUMBER_OF_CONNECTED_PATHS":  viper.GetInt("TARGET_NUMBER_OF_CONNECTED_PATHS"),
+				"number_of_covers":                  n.covers.getSize(),
+				"number_of_paths":                   n.paths.getSize(),
+			})
 			return
 		}
 	}
@@ -1233,13 +1248,7 @@ func (n *Node) handleGetPublishJob(c *gin.Context) {
 	// operation
 	job, found := n.publishJobs.getValue(publishJobID)
 	if !found {
-		c.IndentedJSON(http.StatusNotFound, gin.H{
-			"message":                           "publish job not found",
-			"NUMBER_OF_COVER_NODES_FOR_PUBLISH": viper.GetInt("NUMBER_OF_COVER_NODES_FOR_PUBLISH"),
-			"TARGET_NUMBER_OF_CONNECTED_PATHS":  viper.GetInt("TARGET_NUMBER_OF_CONNECTED_PATHS"),
-			"number_of_covers":                  n.covers.getSize(),
-			"number_of_paths":                   n.paths.getSize(),
-		})
+		c.IndentedJSON(http.StatusNotFound, gin.H{"message": "publish job not found"})
 		return
 	}
 	// response
