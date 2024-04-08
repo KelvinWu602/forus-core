@@ -813,6 +813,10 @@ func (n *Node) handleVerifyCoverReq(conn net.Conn, content *VerifyCoverReq) erro
 }
 
 func (n *Node) handleConnectPathReq(conn net.Conn, content *ConnectPathReq) error {
+	if conn == nil {
+		logMsg("handleConnectPathReq", "conn is nil, ignore the request")
+		return errors.New("tcp conn terminated at handleConnectPathReq")
+	}
 	// check number of cover nodes
 	_, alreadyMyCover := n.covers.getValue(conn.RemoteAddr().String())
 	shouldAcceptConnection := n.covers.getSize() < viper.GetInt("MAXIMUM_NUMBER_OF_COVER_NODES") && !alreadyMyCover
@@ -824,6 +828,7 @@ func (n *Node) handleConnectPathReq(conn net.Conn, content *ConnectPathReq) erro
 		requestedPath, err := DecryptUUID(content.EncryptedTreeUUID, n.privateKey)
 		if err != nil {
 			logProtocolMessageHandlerError("handleConnectPathReq", conn, err, content)
+			defer conn.Close()
 			return err
 		}
 		requesterKeyExchangeInfo := content.KeyExchange
@@ -856,6 +861,7 @@ func (n *Node) handleConnectPathReq(conn net.Conn, content *ConnectPathReq) erro
 	err := gob.NewEncoder(conn).Encode(connectPathResponse)
 	if err != nil {
 		logProtocolMessageHandlerError("handleConnectPathReq", conn, err, content)
+		defer conn.Close()
 		return err
 	}
 	if shouldAcceptConnection {
@@ -869,6 +875,10 @@ func (n *Node) handleConnectPathReq(conn net.Conn, content *ConnectPathReq) erro
 }
 
 func (n *Node) handleCreateProxyReq(conn net.Conn, content *CreateProxyReq) error {
+	if conn == nil {
+		logMsg("handleCreateProxyReq", "conn is nil, ignore the request")
+		return errors.New("tcp conn terminated at handleCreateProxyReq")
+	}
 	// check number of cover nodes
 	_, alreadyMyCover := n.covers.getValue(conn.RemoteAddr().String())
 	shouldAcceptConnection := n.covers.getSize() < viper.GetInt("MAXIMUM_NUMBER_OF_COVER_NODES") && !alreadyMyCover
@@ -906,6 +916,7 @@ func (n *Node) handleCreateProxyReq(conn net.Conn, content *CreateProxyReq) erro
 		encryptedPathID, err := EncryptUUID(newPathID, requesterPublicKey)
 		if err != nil {
 			logProtocolMessageHandlerError("handleCreateProxyReq", conn, err, content)
+			defer conn.Close()
 			return err
 		}
 
@@ -927,6 +938,7 @@ func (n *Node) handleCreateProxyReq(conn net.Conn, content *CreateProxyReq) erro
 	err := gob.NewEncoder(conn).Encode(createProxyResponse)
 	if err != nil {
 		logProtocolMessageHandlerError("handleCreateProxyReq", conn, err, content)
+		defer conn.Close()
 		return err
 	}
 	if shouldAcceptConnection {
