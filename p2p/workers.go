@@ -63,6 +63,7 @@ func (node *Node) blacklistPathIDs() []uuid.UUID {
 	results := []uuid.UUID{}
 	node.paths.iterate(func(pathID uuid.UUID, path PathProfile) {
 		if path.failureCount >= viper.GetInt("MOVE_UP_REQUIREMENT_FAILURE_THRESHOLD") {
+			logMsg("blacklistPathIDs", fmt.Sprintf("Blacklist Path %v: failureCount = %v > %v = threshold", pathID, path.failureCount, viper.GetInt("MOVE_UP_REQUIREMENT_FAILURE_THRESHOLD")))
 			results = append(results, pathID)
 		}
 	}, false)
