@@ -90,6 +90,7 @@ func (node *Node) invalidPathProfiles() []InvalidPathProfile {
 		resp, err := node.sendQueryPathRequest(nextHopAddr)
 		if err != nil {
 			// next-hop is unreachable, should clean this path
+			logMsg("invalidPathProfiles", fmt.Sprintf("Invlid Path %v: next-hop = %v is unreachable", pathID, nextHopAddr))
 			results = append(results, InvalidPathProfile{SelfProfile: oldPath, HandleType: CLEAN})
 			return
 		}
@@ -97,6 +98,7 @@ func (node *Node) invalidPathProfiles() []InvalidPathProfile {
 		for _, newPath := range resp.Paths {
 			newPathID, err := DecryptUUID(newPath.EncryptedTreeUUID, node.privateKey)
 			if err == nil && newPathID == pathID && (oldPath.next2 != newPath.NextHop || !slices.Equal(oldPath.proxyPublic, newPath.ProxyPublicKey)) {
+				logMsg("invalidPathProfiles", fmt.Sprintf("Invlid Path %v: inconsistent path data:\nlocal:%v\nresp:%v\n", pathID, oldPath, newPath))
 				// inconsistent path data, should fix local path
 				results = append(results, InvalidPathProfile{SelfProfile: oldPath, NextHopProfile: newPath, HandleType: FIX})
 				return
@@ -104,6 +106,7 @@ func (node *Node) invalidPathProfiles() []InvalidPathProfile {
 		}
 
 		// cannot find this path on next-hop, should clean this path
+		logMsg("invalidPathProfiles", fmt.Sprintf("Invlid Path %v: path not found on next-hop = %v", pathID, nextHopAddr))
 		results = append(results, InvalidPathProfile{SelfProfile: oldPath, HandleType: CLEAN})
 	}, true)
 
