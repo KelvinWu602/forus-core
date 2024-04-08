@@ -43,7 +43,7 @@ const jsonHTTPSchemaPath = `{
 var byteArrayJsonStringPlaceholder = "ZYAz6TMbgmmoa5m4xFcLbLd/rQN25gknFrrdkpbxe3PxB7wJAjZPvj4bRD8kZ+WZ"
 var byteArrayPlaceholder = []byte{101, 128, 51, 233, 51, 27, 130, 105, 168, 107, 153, 184, 196, 87, 11, 108, 183, 127, 173, 3, 118, 230, 9, 39, 22, 186, 221, 146, 150, 241, 123, 115, 241, 7, 188, 9, 2, 54, 79, 190, 62, 27, 68, 63, 36, 103, 229, 153}
 
-var uuidJsonStringPlaceholder = "c9ae5378-59ff-4dfd-a247-6031fe694e02"
+// var uuidJsonStringPlaceholder = "c9ae5378-59ff-4dfd-a247-6031fe694e02"
 var uuidPlaceholder = uuid.MustParse("c9ae5378-59ff-4dfd-a247-6031fe694e02")
 
 func TestBase64Encoding(t *testing.T) {

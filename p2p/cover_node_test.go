@@ -38,17 +38,14 @@ func (s MockNodeDiscoveryServer) GetMembers(ctx context.Context, req *nd.GetMemb
 	return &nd.GetMembersReponse{Member: []string{"10.0.0.1", "10.0.0.2", "10.0.0.3"}}, nil
 }
 
-func (s MockNodeDiscoveryServer) mustEmbedUnimplementedNodeDiscoveryServer() {
-}
-
-type message struct {
-	// uuid is the first 16 bytes of the message key, which can be random values.
-	uuid [16]byte
-	// checksum is a SHA256 hash of concat(uuid,payload).
-	checksum [32]byte
-	// payload is the actual message content stored by upper application.
-	payload []byte
-}
+// type message struct {
+// 	// uuid is the first 16 bytes of the message key, which can be random values.
+// 	uuid [16]byte
+// 	// checksum is a SHA256 hash of concat(uuid,payload).
+// 	checksum [32]byte
+// 	// payload is the actual message content stored by upper application.
+// 	payload []byte
+// }
 
 type Mock struct {
 	cache map[blueprint.Key][]byte
@@ -89,34 +86,11 @@ func (m *Mock) IsDiscovered(key blueprint.Key) bool {
 	return discovered
 }
 
-// // MockNodeDiscoveryServer implements node-discovery/protos/NodeDiscoveryServer interface
-// type MockImmutableStorageServer struct {
-// 	storage Mock
-// 	is.UnimplementedImmutableStorageServer
-// }
-
-// func (s MockImmutableStorageServer) Store(ctx context.Context, req *is.StoreRequest) (*is.StoreResponse, error) {
-// 	s.storage[[48]byte(req.Key)] = req.Content
-// 	return &is.StoreResponse{Success: true}, nil
-// }
-// func (s MockImmutableStorageServer) Read(context.Context, *is.ReadRequest) (*is.ReadResponse, error) {
-// 	if
-// 	return nil, nil
-// }
-// func (s MockImmutableStorageServer) AvailableKeys(context.Context, *is.AvailableKeysRequest) (*is.AvailableKeysResponse, error) {
-// 	return nil, nil
-// }
-// func (s MockImmutableStorageServer) IsDiscovered(ctx context.Context, req *is.IsDiscoveredRequest) (*is.IsDiscoveredResponse, error) {
-// 	return &is.IsDiscoveredResponse{IsDiscovered: false}, nil
-// }
-
-// func (s MockImmutableStorageServer) mustEmbedUnimplementedImmutableStorageServer() {
-// }
-
 func initNodeDiscoveryMockServer(t *testing.T) *grpc.Server {
 	lis, err := net.Listen("tcp", "localhost:3200")
 	if err != nil {
-		t.Fatalf("error when init MockNodeDiscoveryServer: %s", err)
+		t.Logf("error when init MockNodeDiscoveryServer: %s", err)
+		os.Exit(1)
 	}
 	gs := grpc.NewServer()
 	mockServer := MockNodeDiscoveryServer{}
@@ -143,7 +117,8 @@ func initNodeDiscoveryMockServer(t *testing.T) *grpc.Server {
 func initImmutableStorageMockServer(t *testing.T) *grpc.Server {
 	lis, err := net.Listen("tcp", "localhost:3100")
 	if err != nil {
-		t.Fatalf("error when init MockImmutableStorageServer: %s", err)
+		t.Logf("error when init MockImmutableStorageServer: %s", err)
+		os.Exit(1)
 	}
 	gs := grpc.NewServer()
 	mock := NewMock()
@@ -268,4 +243,21 @@ func TestValidateKey(t *testing.T) {
 	if !blueprint.ValidateKey(blueprint.Key(key[:]), message) {
 		t.Fatal("should ok")
 	}
+}
+
+func useTestMoveUpNodeConfigs() {
+	// avoid fulfillPublishCondition
+}
+
+func TestMoveUpWhenNextHopNotProxySuccess(t *testing.T) {
+	// expected to connect to next next hop
+
+}
+
+func TestMoveUpWhenNextHopNotProxyVerifyFail(t *testing.T) {
+	// expected to self become proxy
+}
+
+func TestMoveUpWhenNextHopNotProxyVerifyOkConnectFail(t *testing.T) {
+	// expected to self become proxy
 }

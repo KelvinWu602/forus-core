@@ -559,7 +559,7 @@ func (n *Node) MoveUp(pathID uuid.UUID) {
 		// 1) check what originalNextNext is
 		if originalNextNext == "ImmutableStorage" {
 			// next-next-hop is ImmutableStorage --> next-hop is proxy --> cannot move up, delete this blacklist path
-			n.paths.deleteValue(pathID)
+			n.deletePathAndRelatedCovers(pathID)
 			logMsg("MoveUp", fmt.Sprintf("Ends, Path: %v:  Case: Next-Next is ImmutableStorage, path is removed", pathID.String()))
 			return
 		}
@@ -567,14 +567,14 @@ func (n *Node) MoveUp(pathID uuid.UUID) {
 		resp, err := n.sendVerifyCoverRequest(originalNextNext, originalNext)
 		if err != nil {
 			// next-next-hop is unreachable --> cannot move up, delete this blacklist path
-			n.paths.deleteValue(pathID)
+			n.deletePathAndRelatedCovers(pathID)
 			logError("MoveUp", err, fmt.Sprintf("Ends, Path: %v:  Case: error during verifyCover, path is removed", pathID.String()))
 			return
 		}
 		if resp.IsVerified {
 			// connectPath with originalNextNext, it will overwrite the current blacklist path
-			resp, _ := n.ConnectPath(originalNextNext, pathID)
-			if resp.Status {
+			resp, err := n.ConnectPath(originalNextNext, pathID)
+			if err == nil && resp.Status {
 				// if success, done
 				logMsg("MoveUp", fmt.Sprintf("Ends, Path: %v:  Case: Successfully connected to next next hop", pathID.String()))
 				return
@@ -602,6 +602,20 @@ func (n *Node) MoveUp(pathID uuid.UUID) {
 	}
 
 	logMsg("MoveUp", fmt.Sprintf("Ends, Path: %v:  Case: Self becomes proxy success", pathID.String()))
+}
+
+// MoveUp helper: move cover nodes
+func (n *Node) deletePathAndRelatedCovers(pathID uuid.UUID) {
+	_, found := n.paths.getValue(pathID)
+	if !found {
+		return
+	}
+	n.paths.deleteValue(pathID)
+	n.covers.iterate(func(coverIP string, coverProfile CoverNodeProfile) {
+		if coverProfile.treeUUID == pathID {
+			delete(n.covers.data, coverIP)
+		}
+	}, false)
 }
 
 // Tree Formation Process by aggregating QueryPath, CreateProxy, ConnectPath & joining cluster
@@ -986,7 +1000,11 @@ func (n *Node) handleCreateProxyReq(conn net.Conn, content *CreateProxyReq) erro
 
 func (n *Node) handleApplicationMessage(rawMessage ApplicationMessage, coverIp string) error {
 	// 1. Symmetric Decrypt.
-	coverProfile, _ := n.covers.getValue(coverIp)
+	coverProfile, found := n.covers.getValue(coverIp)
+	if !found {
+		logMsg("handleApplicationMessage", fmt.Sprintf("IGNORED application message from removed cover's dangling tcp conn = %v", coverIp))
+		return errors.New("message from removed cover")
+	}
 	symmetricKey := coverProfile.secretKey
 	symOutput := rawMessage.SymmetricEncryptedPayload
 	symInputBytes, err := SymmetricDecrypt(symOutput, symmetricKey)
@@ -1003,24 +1021,24 @@ func (n *Node) handleApplicationMessage(rawMessage ApplicationMessage, coverIp s
 	// 3. Check Type
 	switch symInput.Type {
 	case Cover:
-		logMsg("handleApplicationMessage", fmt.Sprintf("Cover Message Received, from cover = %v", coverIp))
 		// simply discarded. The timeout is cancelled when this node received an ApplicationMessage, regardless of Cover or Real.
+		logMsg("handleApplicationMessage", fmt.Sprintf("Cover Message Received, from cover = %v", coverIp))
 		return nil
 	case Real:
 		logMsg("handleApplicationMessage", fmt.Sprintf("Real Message Received, from cover = %v", coverIp))
-		return n.handleRealMessage(symInput.AsymetricEncryptedPayload)
+		return n.handleRealMessage(symInput.AsymetricEncryptedPayload, coverIp)
 	default:
 		logError("handleApplicationMessage", err, fmt.Sprintf("invalid message type, from cover = %v", coverIp))
 		return errors.New("invalid data message type")
 	}
 }
 
-func (n *Node) handleRealMessage(asymOutput []byte) error {
+func (n *Node) handleRealMessage(asymOutput []byte, coverIp string) error {
 	priKey := n.privateKey
 	asymInputBytes, err := AsymmetricDecrypt(asymOutput, priKey)
 	if err != nil && !errors.Is(err, errWrongPrivateKey) {
 		// Failed to decrypt, unknown error
-		logError("handleApplicationMessage", err, fmt.Sprintf("asymmetric decrypt failed, asymOutput = %v", asymOutput))
+		logError("handleRealMessage", err, fmt.Sprintf("asymmetric decrypt failed, asymOutput = %v", asymOutput))
 		return err
 	}
 	// Check if self is the proxy
@@ -1028,38 +1046,48 @@ func (n *Node) handleRealMessage(asymOutput []byte) error {
 	asymInput := AsymetricEncryptDataMessage{}
 	err = gob.NewDecoder(bytes.NewBuffer(asymInputBytes)).Decode(&asymInput)
 	if err != nil {
-		logError("handleApplicationMessage", err, fmt.Sprintf("asymmetric decode failed, asymInput = %v", asymInput))
+		logError("handleRealMessage", err, fmt.Sprintf("asymmetric decode failed, asymInput = %v", asymInput))
 		return err
 	}
+
+	// Real Message Routing Logic
+	srcCoverProfile, found := n.covers.getValue(coverIp)
+	if !found {
+		// Real message is sent from a non-cover, ignore
+		logMsg("handleRealMessage", fmt.Sprintf("IGNORED valid real msg from non-cover = %v", coverIp))
+		return errors.New("cover not found")
+	}
+	destPathId := srcCoverProfile.treeUUID
+	destPathProfile, found := n.paths.getValue(destPathId)
+	if !found {
+		// Cover is connected to a removed path, ignore
+		logMsg("handleRealMessage", fmt.Sprintf("IGNORED valid real msg from cover = %v on removed path = %v", coverIp, destPathId))
+		return errors.New("dest path not found")
+	}
+	if isProxy && destPathProfile.next != "ImmutableStorage" {
+		// if the real message is asymmetrically encrypted with my public key, but routing info says this message should be routed elsewhere, ignore
+		logMsg("handleRealMessage", fmt.Sprintf("IGNORED valid real msg from cover %v connected to %v, next-hop = %v but AsymDecrypt OK", coverIp, destPathId, destPathProfile.next))
+		return errors.New("can asym decrypt but next hop is not IS")
+	}
+
 	if isProxy {
 		// Store in ImmutableStorage
 		key := asymInput.Data.Key
 		content := asymInput.Data.Content
 		resp, err := n.isClient.Store(key, content)
 		if err != nil {
-			logError("handleApplicationMessage", err, fmt.Sprintf("store real message failed, key = %v, content = %v", key, content))
+			logError("handleRealMessage", err, fmt.Sprintf("store real message failed, key = %v, content = %v", key, content))
 			return err
 		}
-		logMsg("handleApplicationMessage", fmt.Sprintf("Store Real Message Success: Status = %v]:Key = %s", resp.Success, string(key[:])))
+		logMsg("handleRealMessage", fmt.Sprintf("Store Real Message Success: Status = %v]:Key = %s", resp.Success, string(key[:])))
 	} else {
 		// Call Forward
-		randI := rand.Intn(n.paths.getSize())
-		i := 0
-		var forwardError error
-		var forwardPath uuid.UUID
-		n.paths.iterate(func(pathID uuid.UUID, path PathProfile) {
-			if i == randI {
-				forwardPath = pathID
-				forwardError = n.Forward(asymOutput, path.next)
-			}
-			i++
-		}, true)
-
-		if forwardError != nil {
-			logError("handleApplicationMessage", forwardError, fmt.Sprintf("Forward failed on paths = %v, asymOutput = %v", forwardPath.String(), asymOutput))
-			return forwardError
+		err := n.Forward(asymOutput, destPathProfile.next)
+		if err != nil {
+			logError("handleRealMessage", err, fmt.Sprintf("Forward failed on paths = %v, asymOutput = %v", destPathId.String(), asymOutput))
+			return err
 		}
-		return nil
+		logMsg("handleRealMessage", fmt.Sprintf("Forward Real Message Success: from %v to %v", coverIp, destPathProfile.next))
 	}
 	return nil
 }
