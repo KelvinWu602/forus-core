@@ -720,11 +720,6 @@ func (n *Node) Publish(key is.Key, message []byte, targetPathId uuid.UUID) (uuid
 		}
 	} else {
 		logMsg("Publish", fmt.Sprintf("key = %v, foward to next hop %v via path %v", key, pathProfile.next, pathID))
-		connProfile, found := n.openConnections.getValue(pathID)
-		if !found || connProfile.Conn == nil || connProfile.Encoder == nil {
-			logMsg("Publish", fmt.Sprintf("No OpenConnections is found: key = %v, foward to next hop %v via path %v", key, pathProfile.next, pathID))
-			return uuid.Nil, errors.New("publish job need to forward to path but failed to find open connections")
-		}
 
 		// 4) encrypt the data message to application message
 		dataMessage := DataMessage{Key: key, Content: message}
@@ -734,6 +729,12 @@ func (n *Node) Publish(key is.Key, message []byte, targetPathId uuid.UUID) (uuid
 		}
 
 		// 5) send the application message to the next hop
+		connProfile, found := n.openConnections.getValue(pathID)
+		if !found || connProfile.Conn == nil || connProfile.Encoder == nil {
+			logMsg("Publish", fmt.Sprintf("No OpenConnections is found: key = %v, foward to next hop %v via path %v", key, pathProfile.next, pathID))
+			return uuid.Nil, errors.New("publish job need to forward to path but failed to find open connections")
+		}
+
 		err = (*connProfile.Encoder).Encode(am)
 		if err != nil {
 			return uuid.Nil, errors.New("error when sending tcp request")
@@ -756,16 +757,11 @@ func (n *Node) Read(key string) ([]byte, error) {
 	return resp.Content, err
 }
 
-func (n *Node) Forward(asymOutput []byte, coverIP string) error {
-	senderCover, found := n.covers.getValue(coverIP)
-	if !found {
-		return errors.New("failed to forward a real message from a non-cover node")
-	}
-	forwardingPath, found := n.paths.getValue(senderCover.treeUUID)
-	if !found {
-		return errors.New("failed to forward a real message to a removed path")
-	}
-
+func (n *Node) Forward(asymOutput []byte, coverProfile CoverNodeProfile, forwardPathProfile PathProfile) error {
+	from := coverProfile.cover
+	to := forwardPathProfile.next
+	forwardPathId := forwardPathProfile.uuid
+	logMsg("Forward", fmt.Sprintf("from %v to %v via %v", from, to, forwardPathId))
 	// 1) symmetric encryption
 	symInput := SymmetricEncryptDataMessage{
 		Type:                      Real,
@@ -774,11 +770,13 @@ func (n *Node) Forward(asymOutput []byte, coverIP string) error {
 
 	symInputInBytes, err := symInput.ToBytes()
 	if err != nil {
+		logError("Forward", err, fmt.Sprintf("error during sym encode, from %v to %v via %v", from, to, forwardPathId))
 		return err
 	}
 
-	symOutput, err := SymmetricEncrypt(symInputInBytes, forwardingPath.symKey)
+	symOutput, err := SymmetricEncrypt(symInputInBytes, forwardPathProfile.symKey)
 	if err != nil {
+		logError("Forward", err, fmt.Sprintf("error during sym encrypt, from %v to %v via %v", from, to, forwardPathId))
 		return err
 	}
 
@@ -788,9 +786,9 @@ func (n *Node) Forward(asymOutput []byte, coverIP string) error {
 
 	// 2) send to the next hop
 	// we can identify the correct next hop by the uuid of the tree
-	connProfile, found := n.openConnections.getValue(forwardingPath.uuid)
+	connProfile, found := n.openConnections.getValue(forwardPathId)
 	if !found || connProfile.Conn == nil || connProfile.Encoder == nil {
-		logMsg("Forward", fmt.Sprintf("Failed to forward Real Message on path %v failed to start due to connProfile = nil.", forwardingPath.uuid.String()))
+		logMsg("Forward", fmt.Sprintf("error openConnections not found, from %v to %v via %v", from, to, forwardPathId))
 		return errors.New("failed to find open connection")
 	}
 
@@ -998,13 +996,9 @@ func (n *Node) handleCreateProxyReq(conn net.Conn, content *CreateProxyReq) erro
 // Handlers for Application Messages, ie. real and cover message
 // ****************
 
-func (n *Node) handleApplicationMessage(rawMessage ApplicationMessage, coverIp string) error {
+func (n *Node) handleApplicationMessage(rawMessage ApplicationMessage, coverProfile CoverNodeProfile, forwardPathProfile PathProfile) error {
 	// 1. Symmetric Decrypt.
-	coverProfile, found := n.covers.getValue(coverIp)
-	if !found {
-		logMsg("handleApplicationMessage", fmt.Sprintf("IGNORED application message from removed cover's dangling tcp conn = %v", coverIp))
-		return errors.New("message from removed cover")
-	}
+	coverIp := coverProfile.cover
 	symmetricKey := coverProfile.secretKey
 	symOutput := rawMessage.SymmetricEncryptedPayload
 	symInputBytes, err := SymmetricDecrypt(symOutput, symmetricKey)
@@ -1022,55 +1016,42 @@ func (n *Node) handleApplicationMessage(rawMessage ApplicationMessage, coverIp s
 	switch symInput.Type {
 	case Cover:
 		// simply discarded. The timeout is cancelled when this node received an ApplicationMessage, regardless of Cover or Real.
-		logMsg("handleApplicationMessage", fmt.Sprintf("Cover Message Received, from cover = %v", coverIp))
 		return nil
 	case Real:
 		logMsg("handleApplicationMessage", fmt.Sprintf("Real Message Received, from cover = %v", coverIp))
-		return n.handleRealMessage(symInput.AsymetricEncryptedPayload, coverIp)
+		return n.handleRealMessage(symInput.AsymetricEncryptedPayload, coverProfile, forwardPathProfile)
 	default:
 		logError("handleApplicationMessage", err, fmt.Sprintf("invalid message type, from cover = %v", coverIp))
 		return errors.New("invalid data message type")
 	}
 }
 
-func (n *Node) handleRealMessage(asymOutput []byte, coverIp string) error {
+func (n *Node) handleRealMessage(asymOutput []byte, coverProfile CoverNodeProfile, forwardPathProfile PathProfile) error {
 	priKey := n.privateKey
 	asymInputBytes, err := AsymmetricDecrypt(asymOutput, priKey)
+	// Check if self is the proxy
 	if err != nil && !errors.Is(err, errWrongPrivateKey) {
-		// Failed to decrypt, unknown error
+		// Failed to decrypt, unknown reason
 		logError("handleRealMessage", err, fmt.Sprintf("asymmetric decrypt failed, asymOutput = %v", asymOutput))
 		return err
 	}
-	// Check if self is the proxy
-	isProxy := err == nil
-	asymInput := AsymetricEncryptDataMessage{}
-	err = gob.NewDecoder(bytes.NewBuffer(asymInputBytes)).Decode(&asymInput)
-	if err != nil {
-		logError("handleRealMessage", err, fmt.Sprintf("asymmetric decode failed, asymInput = %v", asymInput))
-		return err
-	}
 
-	// Real Message Routing Logic
-	srcCoverProfile, found := n.covers.getValue(coverIp)
-	if !found {
-		// Real message is sent from a non-cover, ignore
-		logMsg("handleRealMessage", fmt.Sprintf("IGNORED valid real msg from non-cover = %v", coverIp))
-		return errors.New("cover not found")
-	}
-	destPathId := srcCoverProfile.treeUUID
-	destPathProfile, found := n.paths.getValue(destPathId)
-	if !found {
-		// Cover is connected to a removed path, ignore
-		logMsg("handleRealMessage", fmt.Sprintf("IGNORED valid real msg from cover = %v on removed path = %v", coverIp, destPathId))
-		return errors.New("dest path not found")
-	}
-	if isProxy && destPathProfile.next != "ImmutableStorage" {
-		// if the real message is asymmetrically encrypted with my public key, but routing info says this message should be routed elsewhere, ignore
-		logMsg("handleRealMessage", fmt.Sprintf("IGNORED valid real msg from cover %v connected to %v, next-hop = %v but AsymDecrypt OK", coverIp, destPathId, destPathProfile.next))
+	isProxy := err == nil
+	coverIp := coverProfile.cover
+	forwardPathId := forwardPathProfile.uuid
+	if isProxy && forwardPathProfile.next != "ImmutableStorage" {
+		// if the real message is asymmetrically encrypted with my private key, but routing info says this message should be routed elsewhere, ignore
+		logMsg("handleRealMessage", fmt.Sprintf("IGNORED valid real msg from cover %v connected to %v, next-hop = %v but AsymDecrypt OK", coverIp, forwardPathId, forwardPathProfile.next))
 		return errors.New("can asym decrypt but next hop is not IS")
 	}
 
 	if isProxy {
+		asymInput := AsymetricEncryptDataMessage{}
+		err = gob.NewDecoder(bytes.NewBuffer(asymInputBytes)).Decode(&asymInput)
+		if err != nil {
+			logError("handleRealMessage", err, fmt.Sprintf("asymmetric decode failed, asymInputBytes = %v", asymInputBytes))
+			return err
+		}
 		// Store in ImmutableStorage
 		key := asymInput.Data.Key
 		content := asymInput.Data.Content
@@ -1079,15 +1060,15 @@ func (n *Node) handleRealMessage(asymOutput []byte, coverIp string) error {
 			logError("handleRealMessage", err, fmt.Sprintf("store real message failed, key = %v, content = %v", key, content))
 			return err
 		}
-		logMsg("handleRealMessage", fmt.Sprintf("Store Real Message Success: Status = %v]:Key = %s", resp.Success, string(key[:])))
+		logMsg("handleRealMessage", fmt.Sprintf("Store Real Message Success: Status = %v]:Key = %v", resp.Success, key))
 	} else {
 		// Call Forward
-		err := n.Forward(asymOutput, destPathProfile.next)
+		err := n.Forward(asymOutput, coverProfile, forwardPathProfile)
 		if err != nil {
-			logError("handleRealMessage", err, fmt.Sprintf("Forward failed on paths = %v, asymOutput = %v", destPathId.String(), asymOutput))
+			logError("handleRealMessage", err, fmt.Sprintf("Forward failed on paths = %v, asymOutput = %v", forwardPathId, asymOutput))
 			return err
 		}
-		logMsg("handleRealMessage", fmt.Sprintf("Forward Real Message Success: from %v to %v", coverIp, destPathProfile.next))
+		logMsg("handleRealMessage", fmt.Sprintf("Forward Real Message Success: from %v to %v", coverIp, forwardPathId))
 	}
 	return nil
 }

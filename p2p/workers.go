@@ -283,13 +283,13 @@ func (node *Node) sendCoverMessageWorker(connProfile *TCPConnectionProfile, path
 }
 
 func (node *Node) handleApplicationMessageWorker(conn net.Conn, coverProfileKey string) {
+	defer node.covers.deleteValue(coverProfileKey)
 	if conn == nil {
 		logMsg("handleApplicationMessageWorker", fmt.Sprintf("handleApplicationMessageWorker failed to start due to conn = nil, CoverIP = %v.", coverProfileKey))
-		node.covers.deleteValue(coverProfileKey)
 		return
 	}
-	logMsg("handleApplicationMessageWorker", fmt.Sprintf("handleApplicationMessageWorker from %s is started", conn.RemoteAddr().String()))
 	defer conn.Close()
+	logMsg("handleApplicationMessageWorker", fmt.Sprintf("handleApplicationMessageWorker from %s is started", conn.RemoteAddr().String()))
 
 	coverIp := conn.RemoteAddr().String()
 	decoder := gob.NewDecoder(conn)
@@ -311,16 +311,27 @@ func (node *Node) handleApplicationMessageWorker(conn net.Conn, coverProfileKey 
 		select {
 		case msg := <-doneSuccess:
 			conn.SetDeadline(time.Now().Add(viper.GetDuration("APPLICATION_MESSAGE_RECEIVING_INTERVAL")).Add(time.Minute))
-			if err := node.handleApplicationMessage(msg, coverIp); err != nil {
-				logError("handleApplicationMessageWorker", err, fmt.Sprintf("failed to handle application message from %v: %v", coverIp, msg))
+
+			coverProfile, found := node.covers.getValue(coverIp)
+			if !found {
+				logMsg("handleApplicationMessageWorker", fmt.Sprintf("[Cover Not Found]:failed to handle application message from %v", coverIp))
+				return
+			}
+			forwardPathProfile, found := node.paths.getValue(coverProfile.treeUUID)
+			if !found {
+				logMsg("handleApplicationMessageWorker", fmt.Sprintf("[Path Not Found]:failed to handle application message from %v to path %v", coverIp, coverProfile.treeUUID))
+				return
+			}
+
+			// in the whole handleApplicationMessage scope, should assume coverProfile and forwardPathProfile are valid
+			if err := node.handleApplicationMessage(msg, coverProfile, forwardPathProfile); err != nil {
+				logError("handleApplicationMessageWorker", err, fmt.Sprintf("failed to handle application message from %v to path %v: %v", coverIp, coverProfile.treeUUID, msg))
 			}
 		case err := <-doneErr:
 			logError("handleApplicationMessageWorker", err, fmt.Sprintf("error when receiving application message from %s", conn.RemoteAddr().String()))
-			node.covers.deleteValue(coverIp)
 			return
 		case <-time.After(viper.GetDuration("APPLICATION_MESSAGE_RECEIVING_INTERVAL")):
 			logMsg("handleApplicationMessageWorker", fmt.Sprintf("handleApplicationMessageWorker from %s: COVER MESSAGE TIMEOUT.\n", conn.RemoteAddr().String()))
-			node.covers.deleteValue(coverIp)
 			return
 		}
 	}
