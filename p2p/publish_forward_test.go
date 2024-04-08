@@ -154,7 +154,7 @@ func TestPublishOnCover(t *testing.T) {
 	// All component prefixed with 1 ==> Mock
 	// All component prefixed with 2 ==> Normal
 	mockND1 := NewMockND([]string{"127.0.0.1:3001"})
-	mockND2 := NewMockND([]string{"127.0.0.1:3000"})
+	mockND2 := NewMockND([]string{"127.0.0.1:4001"})
 
 	mockIS1 := NewMockIS()
 	mockIS2 := ShareCacheWith(mockIS1)
@@ -235,11 +235,6 @@ func TestPublishOnCover(t *testing.T) {
 	base64encodedContent := base64.StdEncoding.EncodeToString(msg.Content)
 	assert.Equal(nil, err, "should have no unmarshal error")
 	assert.Equal(testmessagepayload, base64encodedContent, "content mismatch")
-}
-
-func TestForwardOnProxy(t *testing.T) {
-	// NormalNode.Forward <- MockCover.Publish
-
 }
 
 func TestForwardOnCover(t *testing.T) {
