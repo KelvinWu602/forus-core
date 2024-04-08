@@ -25,7 +25,7 @@ import (
 type Node struct {
 	// Info members
 	paths           *MutexMap[uuid.UUID, PathProfile]
-	openConnections *MutexMap[uuid.UUID, net.Conn]
+	openConnections *MutexMap[uuid.UUID, *TCPConnectionProfile]
 	halfOpenPath    *MutexMap[uuid.UUID, PathProfile]
 	covers          *MutexMap[string, CoverNodeProfile]
 	publishJobs     *MutexMap[uuid.UUID, PublishJobProfile]
@@ -77,7 +77,7 @@ func NewNode() *Node {
 		privateKey: private,
 
 		paths:           NewMutexMap[uuid.UUID, PathProfile](),
-		openConnections: NewMutexMap[uuid.UUID, net.Conn](),
+		openConnections: NewMutexMap[uuid.UUID, *TCPConnectionProfile](),
 		halfOpenPath:    NewMutexMap[uuid.UUID, PathProfile](),
 		covers:          NewMutexMap[string, CoverNodeProfile](),
 		publishJobs:     NewMutexMap[uuid.UUID, PublishJobProfile](),
@@ -242,7 +242,7 @@ func initGobTypeRegistration() {
 // A generic function used to send tcp requests and wait for response with a timeout.
 // destAddr can contain only IP address: TCP_SERVER_LISTEN_PORT will be appended as dest port
 // destAddr can contain full address, i.e. IP and Port: will directly use the full address
-func tcpSendAndWaitResponse[RESPONSE_TYPE any](reqBody *ProtocolMessage, destAddr string, keepAlive bool) (*RESPONSE_TYPE, *net.Conn, error) {
+func tcpSendAndWaitResponse[RESPONSE_TYPE any](reqBody *ProtocolMessage, destAddr string, keepAlive bool) (*RESPONSE_TYPE, *TCPConnectionProfile, error) {
 	logMsg("tcpSendAndWaitResponse", fmt.Sprintf("reqBody = %v, destAddr = %v, keepAlive = %v", reqBody, destAddr, keepAlive))
 
 	var addr string
@@ -267,7 +267,8 @@ func tcpSendAndWaitResponse[RESPONSE_TYPE any](reqBody *ProtocolMessage, destAdd
 		}
 	}()
 
-	err = gob.NewEncoder(conn).Encode(*reqBody)
+	encoder := gob.NewEncoder(conn)
+	err = encoder.Encode(*reqBody)
 	if err != nil {
 		logError("tcpSendAndWaitResponse", err, fmt.Sprintf("error at gob.NewEncoder(conn).Encode(*reqBody) where *reqBody = %v", *reqBody))
 		return nil, nil, err
@@ -278,7 +279,7 @@ func tcpSendAndWaitResponse[RESPONSE_TYPE any](reqBody *ProtocolMessage, destAdd
 		logError("tcpSendAndWaitResponse", err, fmt.Sprintf("error at waitForResponse[RESPONSE_TYPE](conn) where conn.RemoteAddr().String() = %v", conn.RemoteAddr().String()))
 		return nil, nil, err
 	}
-	return response, &conn, nil
+	return response, &TCPConnectionProfile{Conn: &conn, Encoder: encoder}, nil
 }
 
 // A generic function used to wait for tcp response.
@@ -344,7 +345,7 @@ func (n *Node) sendVerifyCoverRequest(addr string, coverToBeVerified string) (*V
 	return resp, err
 }
 
-func (n *Node) sendConnectPathRequest(addr string, treeID uuid.UUID, n3X DHKeyExchange) (*ConnectPathResp, *net.Conn, error) {
+func (n *Node) sendConnectPathRequest(addr string, treeID uuid.UUID, n3X DHKeyExchange) (*ConnectPathResp, *TCPConnectionProfile, error) {
 	targetPublicKey, foundPubKey := n.peerPublicKeys.getValue(addr)
 	_, foundHalfOpenPath := n.halfOpenPath.getValue(treeID)
 	if !foundPubKey || !foundHalfOpenPath {
@@ -379,7 +380,7 @@ func (n *Node) sendConnectPathRequest(addr string, treeID uuid.UUID, n3X DHKeyEx
 }
 
 // request a proxy triggered by empty path in pathResp
-func (n *Node) sendCreateProxyRequest(addr string, n3X DHKeyExchange) (*CreateProxyResp, *net.Conn, error) {
+func (n *Node) sendCreateProxyRequest(addr string, n3X DHKeyExchange) (*CreateProxyResp, *TCPConnectionProfile, error) {
 	serialized, err := gobEncodeToBytes(CreateProxyReq{
 		KeyExchange: n3X,
 		PublicKey:   n.publicKey,
@@ -463,7 +464,7 @@ func (n *Node) ConnectPath(addr string, treeID uuid.UUID) (*ConnectPathResp, err
 	myKeyExchangeSecret := RandomBigInt(lenInByte)
 	keyExchangeInfo := NewKeyExchange(*myKeyExchangeSecret)
 
-	resp, connPtr, err := n.sendConnectPathRequest(addr, treeID, keyExchangeInfo)
+	resp, connProfile, err := n.sendConnectPathRequest(addr, treeID, keyExchangeInfo)
 	if err != nil {
 		logError("ConnectPath", err, fmt.Sprintf("Ends, Addr: %v; TreeID: %v", addr, treeID))
 		return nil, err
@@ -491,9 +492,9 @@ func (n *Node) ConnectPath(addr string, treeID uuid.UUID) (*ConnectPathResp, err
 		})
 
 		// Start the sendCoverMessageWorker
-		go n.sendCoverMessageWorker(*connPtr, treeID)
+		go n.sendCoverMessageWorker(connProfile, treeID)
 		// Store a pointer to the opened tcp connection for later publish jobs
-		n.openConnections.setValue(treeID, *connPtr)
+		n.openConnections.setValue(treeID, connProfile)
 	}
 
 	logMsg("ConnectPath", fmt.Sprintf("Ends, Addr: %v; TreeID: %v", addr, treeID))
@@ -509,7 +510,7 @@ func (n *Node) CreateProxy(addr string) (*CreateProxyResp, error) {
 	myKeyExchangeSecret := RandomBigInt(lenInByte)
 	keyExchangeInfo := NewKeyExchange(*myKeyExchangeSecret)
 
-	resp, connPtr, err := n.sendCreateProxyRequest(addr, keyExchangeInfo)
+	resp, connProfile, err := n.sendCreateProxyRequest(addr, keyExchangeInfo)
 	if err != nil {
 		logError("CreateProxy", err, fmt.Sprintf("Ends, Addr: %v", addr))
 		return resp, err
@@ -533,8 +534,8 @@ func (n *Node) CreateProxy(addr string) (*CreateProxyResp, error) {
 		})
 
 		// Start the sendCoverMessageWorker
-		go n.sendCoverMessageWorker(*connPtr, treeID)
-		n.openConnections.setValue(treeID, *connPtr)
+		go n.sendCoverMessageWorker(connProfile, treeID)
+		n.openConnections.setValue(treeID, connProfile)
 	}
 
 	logMsg("CreateProxy", fmt.Sprintf("Ends, Addr: %v", addr))
@@ -703,8 +704,8 @@ func (n *Node) Publish(key is.Key, message []byte, targetPathId uuid.UUID) (uuid
 		}
 	} else {
 		logMsg("Publish", fmt.Sprintf("key = %v, foward to next hop %v via path %v", key, pathProfile.next, pathID))
-		conn, found := n.openConnections.getValue(pathID)
-		if !found {
+		connProfile, found := n.openConnections.getValue(pathID)
+		if !found || connProfile.Conn == nil || connProfile.Encoder == nil {
 			logMsg("Publish", fmt.Sprintf("No OpenConnections is found: key = %v, foward to next hop %v via path %v", key, pathProfile.next, pathID))
 			return uuid.Nil, errors.New("publish job need to forward to path but failed to find open connections")
 		}
@@ -717,7 +718,7 @@ func (n *Node) Publish(key is.Key, message []byte, targetPathId uuid.UUID) (uuid
 		}
 
 		// 5) send the application message to the next hop
-		err = gob.NewEncoder(conn).Encode(am)
+		err = connProfile.Encoder.Encode(am)
 		if err != nil {
 			return uuid.Nil, errors.New("error when sending tcp request")
 		}
@@ -770,9 +771,13 @@ func (n *Node) Forward(asymOutput []byte, coverIP string) error {
 
 	// 2) send to the next hop
 	// we can identify the correct next hop by the uuid of the tree
-	conn, _ := n.openConnections.getValue(forwardingPath.uuid)
+	connProfile, found := n.openConnections.getValue(forwardingPath.uuid)
+	if !found || connProfile.Conn == nil || connProfile.Encoder == nil {
+		logMsg("Forward", fmt.Sprintf("Failed to forward Real Message on path %v failed to start due to connProfile = nil.", forwardingPath.uuid.String()))
+		return errors.New("failed to find open connection")
+	}
 
-	err = gob.NewEncoder(conn).Encode(am)
+	err = connProfile.Encoder.Encode(am)
 	if err != nil {
 		return errors.New("error when forwarding real message")
 	}
@@ -983,11 +988,13 @@ func (n *Node) handleApplicationMessage(rawMessage ApplicationMessage, coverIp s
 	symOutput := rawMessage.SymmetricEncryptedPayload
 	symInputBytes, err := SymmetricDecrypt(symOutput, symmetricKey)
 	if err != nil {
+		logError("handleApplicationMessage", err, fmt.Sprintf("symmetric decrypt failed, from cover = %v", coverIp))
 		return err
 	}
 	// 2. Decode Symmetric Input Bytes
 	symInput := SymmetricEncryptDataMessage{}
 	if err := gob.NewDecoder(bytes.NewBuffer(symInputBytes)).Decode(&symInput); err != nil {
+		logError("handleApplicationMessage", err, fmt.Sprintf("symmetric decrypt failed, from cover = %v", coverIp))
 		return err
 	}
 	// 3. Check Type
@@ -996,8 +1003,10 @@ func (n *Node) handleApplicationMessage(rawMessage ApplicationMessage, coverIp s
 		// simply discarded. The timeout is cancelled when this node received an ApplicationMessage, regardless of Cover or Real.
 		return nil
 	case Real:
+		logError("handleApplicationMessage", err, fmt.Sprintf("Real Message Received, from cover = %v", coverIp))
 		return n.handleRealMessage(symInput.AsymetricEncryptedPayload)
 	default:
+		logError("handleApplicationMessage", err, fmt.Sprintf("invalid message type, from cover = %v", coverIp))
 		return errors.New("invalid data message type")
 	}
 }
@@ -1007,6 +1016,7 @@ func (n *Node) handleRealMessage(asymOutput []byte) error {
 	asymInputBytes, err := AsymmetricDecrypt(asymOutput, priKey)
 	if err != nil && !errors.Is(err, errWrongPrivateKey) {
 		// Failed to decrypt, unknown error
+		logError("handleApplicationMessage", err, fmt.Sprintf("asymmetric decrypt failed, asymOutput = %v", asymOutput))
 		return err
 	}
 	// Check if self is the proxy
@@ -1014,6 +1024,7 @@ func (n *Node) handleRealMessage(asymOutput []byte) error {
 	asymInput := AsymetricEncryptDataMessage{}
 	err = gob.NewDecoder(bytes.NewBuffer(asymInputBytes)).Decode(&asymInput)
 	if err != nil {
+		logError("handleApplicationMessage", err, fmt.Sprintf("asymmetric decode failed, asymInput = %v", asymInput))
 		return err
 	}
 	if isProxy {
@@ -1022,9 +1033,10 @@ func (n *Node) handleRealMessage(asymOutput []byte) error {
 		content := asymInput.Data.Content
 		resp, err := n.isClient.Store(key, content)
 		if err != nil {
+			logError("handleApplicationMessage", err, fmt.Sprintf("store real message failed, key = %v, content = %v", key, content))
 			return err
 		}
-		log.Printf("[Proxy.Store: Status = %v]:Key=%s", resp.Success, string(key[:]))
+		logMsg("handleApplicationMessage", fmt.Sprintf("Store Real Message Success: Status = %v]:Key = %s", resp.Success, string(key[:])))
 	} else {
 		// Call Forward
 		randI := rand.Intn(n.paths.getSize())
@@ -1036,6 +1048,7 @@ func (n *Node) handleRealMessage(asymOutput []byte) error {
 			}
 			i++
 		}, true)
+		logMsg("handleApplicationMessage", fmt.Sprintf("Forwarding on all paths failed, asymOutput = %v", asymOutput))
 		return forwardError
 	}
 	return nil

@@ -98,10 +98,14 @@ func (node *Node) invalidPathProfiles() []InvalidPathProfile {
 
 		for _, newPath := range resp.Paths {
 			newPathID, err := DecryptUUID(newPath.EncryptedTreeUUID, node.privateKey)
-			if err == nil && newPathID == pathID && (oldPath.next2 != newPath.NextHop || !slices.Equal(oldPath.proxyPublic, newPath.ProxyPublicKey)) {
-				logMsg("invalidPathProfiles", fmt.Sprintf("Invlid Path %v: inconsistent path data:\nlocal:%v\nresp:%v\n", pathID, oldPath, newPath))
-				// inconsistent path data, should fix local path
-				results = append(results, InvalidPathProfile{SelfProfile: oldPath, NextHopProfile: newPath, HandleType: FIX})
+			if err == nil && newPathID == pathID {
+				if oldPath.next2 != newPath.NextHop || !slices.Equal(oldPath.proxyPublic, newPath.ProxyPublicKey) {
+					logMsg("invalidPathProfiles", fmt.Sprintf("Invlid Path %v: inconsistent path data:\nlocal:%v\nresp:%v\n", pathID, oldPath, newPath))
+					// inconsistent path data, should fix local path
+					results = append(results, InvalidPathProfile{SelfProfile: oldPath, NextHopProfile: newPath, HandleType: FIX})
+					return
+				}
+				// valid path
 				return
 			}
 		}
@@ -230,16 +234,17 @@ func (node *Node) checkPublishConditionWorker() {
 
 }
 
-func (node *Node) sendCoverMessageWorker(conn net.Conn, pathID uuid.UUID) {
-	if conn == nil {
-		logMsg("sendCoverMessageWorker", fmt.Sprintf("sendCoverMessageWorker on path %v failed to start due to conn = nil.", pathID.String()))
+func (node *Node) sendCoverMessageWorker(connProfile *TCPConnectionProfile, pathID uuid.UUID) {
+	if connProfile == nil || connProfile.Conn == nil || connProfile.Encoder == nil {
+		logMsg("sendCoverMessageWorker", fmt.Sprintf("sendCoverMessageWorker on path %v failed to start due to connProfile = nil.", pathID.String()))
 		node.paths.deleteValue(pathID)
 		return
 	}
+	conn := *connProfile.Conn
 	logMsg("sendCoverMessageWorker", fmt.Sprintf("sendCoverMessageWorker to %s on path %v is started successfully.", conn.RemoteAddr().String(), pathID.String()))
 	defer conn.Close()
 
-	encoder := gob.NewEncoder(conn)
+	encoder := connProfile.Encoder
 
 	doneSuccess := make(chan bool)
 	doneErr := make(chan error)
