@@ -145,6 +145,8 @@ func (n *Node) StartHTTP() {
 
 	router.GET("/key-pair", n.handleGetKeyPair)
 
+	router.GET("/configs", n.handleGetConfigs)
+
 	go router.Run(addr)
 	logMsg("StartHTTP", "HTTP server running")
 }
@@ -718,10 +720,11 @@ func (n *Node) Publish(key is.Key, message []byte, targetPathId uuid.UUID) (uuid
 		}
 
 		// 5) send the application message to the next hop
-		err = connProfile.Encoder.Encode(am)
+		err = (*connProfile.Encoder).Encode(am)
 		if err != nil {
 			return uuid.Nil, errors.New("error when sending tcp request")
 		}
+		logMsg("Publish", fmt.Sprintf("Forward Real Message Success: key = %v, foward to next hop %v via path %v", key, pathProfile.next, pathID))
 	}
 	// 6) update the publishingJob map
 	newJobID := uuid.New()
@@ -1003,7 +1006,7 @@ func (n *Node) handleApplicationMessage(rawMessage ApplicationMessage, coverIp s
 		// simply discarded. The timeout is cancelled when this node received an ApplicationMessage, regardless of Cover or Real.
 		return nil
 	case Real:
-		logError("handleApplicationMessage", err, fmt.Sprintf("Real Message Received, from cover = %v", coverIp))
+		logMsg("handleApplicationMessage", fmt.Sprintf("Real Message Received, from cover = %v", coverIp))
 		return n.handleRealMessage(symInput.AsymetricEncryptedPayload)
 	default:
 		logError("handleApplicationMessage", err, fmt.Sprintf("invalid message type, from cover = %v", coverIp))
@@ -1041,15 +1044,21 @@ func (n *Node) handleRealMessage(asymOutput []byte) error {
 		// Call Forward
 		randI := rand.Intn(n.paths.getSize())
 		i := 0
-		forwardError := errors.New("unknown error during Forward")
+		var forwardError error
+		var forwardPath uuid.UUID
 		n.paths.iterate(func(pathID uuid.UUID, path PathProfile) {
 			if i == randI {
+				forwardPath = pathID
 				forwardError = n.Forward(asymOutput, path.next)
 			}
 			i++
 		}, true)
-		logMsg("handleApplicationMessage", fmt.Sprintf("Forwarding on all paths failed, asymOutput = %v", asymOutput))
-		return forwardError
+
+		if forwardError != nil {
+			logError("handleApplicationMessage", forwardError, fmt.Sprintf("Forward failed on paths = %v, asymOutput = %v", forwardPath.String(), asymOutput))
+			return forwardError
+		}
+		return nil
 	}
 	return nil
 }
@@ -1359,4 +1368,34 @@ func (n *Node) handleGetCovers(c *gin.Context) {
 func (n *Node) handleGetKeyPair(c *gin.Context) {
 	// response
 	c.IndentedJSON(http.StatusOK, gin.H{"public_key": n.publicKey, "private_key": n.privateKey})
+}
+
+func (n *Node) handleGetConfigs(c *gin.Context) {
+	// response
+	c.IndentedJSON(http.StatusOK, gin.H{
+		// time
+		"COVER_MESSAGE_SENDING_INTERVAL":          viper.GetDuration("COVER_MESSAGE_SENDING_INTERVAL"),
+		"APPLICATION_MESSAGE_RECEIVING_INTERVAL":  viper.GetDuration("APPLICATION_MESSAGE_RECEIVING_INTERVAL"),
+		"PUBLISH_JOB_FAILED_TIMEOUT":              viper.GetDuration("PUBLISH_JOB_FAILED_TIMEOUT"),
+		"PUBLISH_JOB_CHECKING_INTERVAL":           viper.GetDuration("PUBLISH_JOB_CHECKING_INTERVAL"),
+		"TCP_REQUEST_TIMEOUT":                     viper.GetDuration("TCP_REQUEST_TIMEOUT"),
+		"MAINTAIN_PATHS_HEALTH_CHECKING_INTERVAL": viper.GetDuration("MAINTAIN_PATHS_HEALTH_CHECKING_INTERVAL"),
+		"PUBLISH_CONDITION_CHECKING_INTERVAL":     viper.GetDuration("PUBLISH_CONDITION_CHECKING_INTERVAL"),
+		"FULFILL_PUBLISH_CONDITION_TIMEOUT":       viper.GetDuration("FULFILL_PUBLISH_CONDITION_TIMEOUT"),
+		"FULFILL_PUBLISH_CONDITION_INTERVAL":      viper.GetDuration("FULFILL_PUBLISH_CONDITION_INTERVAL"),
+		// int
+		"HALF_OPEN_PATH_BUFFER_SIZE":            viper.GetInt("HALF_OPEN_PATH_BUFFER_SIZE"),
+		"TARGET_NUMBER_OF_CONNECTED_PATHS":      viper.GetInt("TARGET_NUMBER_OF_CONNECTED_PATHS"),
+		"MAXIMUM_NUMBER_OF_COVER_NODES":         viper.GetInt("MAXIMUM_NUMBER_OF_COVER_NODES"),
+		"NUMBER_OF_COVER_NODES_FOR_PUBLISH":     viper.GetInt("NUMBER_OF_COVER_NODES_FOR_PUBLISH"),
+		"MOVE_UP_REQUIREMENT_FAILURE_THRESHOLD": viper.GetInt("MOVE_UP_REQUIREMENT_FAILURE_THRESHOLD"),
+		// string
+		"TCP_SERVER_LISTEN_PORT":               viper.GetString("TCP_SERVER_LISTEN_PORT"),
+		"HTTP_SERVER_LISTEN_PORT":              viper.GetString("HTTP_SERVER_LISTEN_PORT"),
+		"NODE_DISCOVERY_SERVER_LISTEN_PORT":    viper.GetString("NODE_DISCOVERY_SERVER_LISTEN_PORT"),
+		"IMMUTABLE_STORAGE_SERVER_LISTEN_PORT": viper.GetString("IMMUTABLE_STORAGE_SERVER_LISTEN_PORT"),
+		"CLUSTER_CONTACT_NODE_IP":              viper.GetString("CLUSTER_CONTACT_NODE_IP"),
+		// bool
+		"TESTING_FLAG": viper.GetBool("TESTING_FLAG"),
+	})
 }

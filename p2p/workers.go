@@ -274,6 +274,8 @@ func (node *Node) sendCoverMessageWorker(connProfile *TCPConnectionProfile, path
 			node.paths.deleteValue(pathID)
 			return
 		case <-doneSuccess:
+			// postpone tcp connection deadline
+			(*connProfile.Conn).SetDeadline(time.Now().Add(viper.GetDuration("COVER_MESSAGE_SENDING_INTERVAL")).Add(time.Minute))
 			logMsg("sendCoverMessageWorker", fmt.Sprintf("cover message to %s on path %v is sent successfully.", conn.RemoteAddr().String(), pathID.String()))
 			time.Sleep(viper.GetDuration("COVER_MESSAGE_SENDING_INTERVAL"))
 		}
@@ -308,6 +310,7 @@ func (node *Node) handleApplicationMessageWorker(conn net.Conn, coverProfileKey 
 
 		select {
 		case msg := <-doneSuccess:
+			conn.SetDeadline(time.Now().Add(viper.GetDuration("APPLICATION_MESSAGE_RECEIVING_INTERVAL")).Add(time.Minute))
 			if err := node.handleApplicationMessage(msg, coverIp); err != nil {
 				logError("handleApplicationMessageWorker", err, fmt.Sprintf("failed to handle application message from %v: %v", coverIp, msg))
 			}

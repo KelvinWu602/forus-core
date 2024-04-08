@@ -48,7 +48,7 @@ func NewCoverMessage(proxyPublicKey []byte, symmetricKey big.Int) (*ApplicationM
 }
 
 func NewRealMessage(dm DataMessage, proxyPublicKey []byte, symmetricKey big.Int) (*ApplicationMessage, error) {
-	logMsg("NewRealMessage", fmt.Sprintf("dm = %v\nproxyPublicKey = %v\nsymmetricKey = %v\n", dm, string(proxyPublicKey), symmetricKey))
+	logMsg("NewRealMessage", fmt.Sprintf("dm = %v\nproxyPublicKey = %v\nsymmetricKey = %v\n", dm, proxyPublicKey, symmetricKey))
 	asymInput, err := dm.CreateAsymmetricEncryptionInput()
 	if err != nil {
 		logError("NewRealMessage", err, "dm.CreateAsymmetricEncryptionInput()")

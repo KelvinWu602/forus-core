@@ -67,7 +67,6 @@ func initConfigs() {
 	viper.BindEnv("HTTP_SERVER_LISTEN_PORT")
 	viper.BindEnv("NODE_DISCOVERY_SERVER_LISTEN_PORT")
 	viper.BindEnv("IMMUTABLE_STORAGE_SERVER_LISTEN_PORT")
-	viper.BindEnv("IMMUTABLE_STORAGE_SERVER_LISTEN_PORT")
 	viper.BindEnv("CLUSTER_CONTACT_NODE_IP")
 	// bool
 	viper.BindEnv("TESTING_FLAG")
