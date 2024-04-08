@@ -65,7 +65,7 @@ func NewRealMessage(dm DataMessage, proxyPublicKey []byte, symmetricKey big.Int)
 		return nil, err
 	}
 	symInput := SymmetricEncryptDataMessage{
-		Type:                      Cover,
+		Type:                      Real,
 		AsymetricEncryptedPayload: asymOutput,
 	}
 	symInputBytes, err := symInput.ToBytes()

@@ -1003,6 +1003,7 @@ func (n *Node) handleApplicationMessage(rawMessage ApplicationMessage, coverIp s
 	// 3. Check Type
 	switch symInput.Type {
 	case Cover:
+		logMsg("handleApplicationMessage", fmt.Sprintf("Cover Message Received, from cover = %v", coverIp))
 		// simply discarded. The timeout is cancelled when this node received an ApplicationMessage, regardless of Cover or Real.
 		return nil
 	case Real:
