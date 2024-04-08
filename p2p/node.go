@@ -534,6 +534,7 @@ func (n *Node) CreateProxy(addr string) (*CreateProxyResp, error) {
 
 		// Start the sendCoverMessageWorker
 		go n.sendCoverMessageWorker(*connPtr, treeID)
+		n.openConnections.setValue(treeID, *connPtr)
 	}
 
 	logMsg("CreateProxy", fmt.Sprintf("Ends, Addr: %v", addr))
@@ -702,7 +703,11 @@ func (n *Node) Publish(key is.Key, message []byte, targetPathId uuid.UUID) (uuid
 		}
 	} else {
 		logMsg("Publish", fmt.Sprintf("key = %v, foward to next hop %v via path %v", key, pathProfile.next, pathID))
-		conn, _ := n.openConnections.getValue(pathID)
+		conn, found := n.openConnections.getValue(pathID)
+		if !found {
+			logMsg("Publish", fmt.Sprintf("No OpenConnections is found: key = %v, foward to next hop %v via path %v", key, pathProfile.next, pathID))
+			return uuid.Nil, errors.New("publish job need to forward to path but failed to find open connections")
+		}
 
 		// 4) encrypt the data message to application message
 		dataMessage := DataMessage{Key: key, Content: message}
