@@ -1056,7 +1056,7 @@ func (n *Node) handlePostMessage(c *gin.Context) {
 	keyBase64 := c.Param("key")
 	key, err := base64.URLEncoding.DecodeString(keyBase64)
 	if err != nil {
-		c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "key should be base64 encoded string", "error": err.Error()})
+		c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "key should be base64 encoded string", "error": err.Error(), "received_key": keyBase64})
 		return
 	}
 	if len(key) != 48 {

@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -65,6 +68,36 @@ func TestBase64Encoding(t *testing.T) {
 	key, err := base64.StdEncoding.DecodeString(jsonDecodedString)
 	assert.Equal(nil, err, "should be nil")
 	assert.Equal(byteArrayPlaceholder, key, "should be equal")
+}
+
+func TestHTTPDecode(t *testing.T) {
+	done := make(chan bool)
+	go func() {
+		router := gin.Default()
+		router.GET("/message/:key", func(ctx *gin.Context) {
+			keyBase64 := ctx.Param("key")
+			_, err := base64.URLEncoding.DecodeString(keyBase64)
+			if err != nil {
+				t.Log(keyBase64)
+				ctx.Status(http.StatusBadRequest)
+				return
+			}
+			ctx.Status(http.StatusOK)
+		})
+
+		go router.Run("localhost:8080")
+
+		<-done
+	}()
+
+	time.Sleep(time.Second)
+	resp, err := http.Get("http://localhost:8080/message/9jZfMjv_yZnahjoX8zj5qTUwRnC4RFjk5lsxbQSgL8mu1nKDd28tViBVH1nxRvtY")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatal("Received wrong status code")
+	}
 }
 
 func TestHTTPPostMessageReqWithoutPathId(t *testing.T) {
