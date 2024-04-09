@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -60,7 +61,9 @@ func TestConfigs(t *testing.T) {
 
 	var setup sync.WaitGroup
 	setup.Add(3)
-	mockND := NewMockND([]string{})
+	members := map[string][]string{}
+	members["127.0.0.1:3001"] = []string{}
+	mockND := NewMockND("127.0.0.1:3001", members, &sync.RWMutex{})
 	mockIS := NewMockIS()
 	go func() {
 		initMockND(mockND, "3201")
@@ -86,6 +89,64 @@ func TestConfigs(t *testing.T) {
 	t.Log(resBody)
 }
 
+func TestMockND(t *testing.T) {
+	assert := assert.New(t)
+	var setup sync.WaitGroup
+	setup.Add(1)
+	// All component prefixed with 1 ==> Mock
+	// All component prefixed with 2 ==> Normal
+	members := map[string][]string{}
+	members["127.0.0.1:3001"] = []string{}
+	members["127.0.0.1:4001"] = []string{}
+	NDlock := sync.RWMutex{}
+	mockND1 := NewMockND("127.0.0.1:4001", members, &NDlock)
+	mockND2 := NewMockND("127.0.0.1:3001", members, &NDlock)
+
+	go func() {
+		initMockND(mockND1, "3201")
+		initMockND(mockND2, "3200")
+		setup.Done()
+	}()
+	setup.Wait()
+
+	v1 := viper.New()
+	v2 := viper.New()
+
+	v1.SetDefault("NODE_DISCOVERY_SERVER_LISTEN_PORT", ":3201")
+	v2.SetDefault("NODE_DISCOVERY_SERVER_LISTEN_PORT", ":3200")
+	ndclient1 := initNodeDiscoverClient(v1)
+	ndclient2 := initNodeDiscoverClient(v2)
+
+	resp1, err1 := ndclient1.GetMembers()
+	resp2, err2 := ndclient2.GetMembers()
+	assert.Equal(nil, err1, "should be nil")
+	assert.Equal(nil, err2, "should be nil")
+	assert.Equal([]string(nil), resp1.Member, "should be nil")
+	assert.Equal([]string(nil), resp2.Member, "should be nil")
+
+	// ND1 joinCluster
+	_, err1 = ndclient1.JoinCluster("127.0.0.1:3001")
+	assert.Equal(nil, err1, "should be nil")
+
+	resp1, err1 = ndclient1.GetMembers()
+	resp2, err2 = ndclient2.GetMembers()
+	assert.Equal(nil, err1, "should be nil")
+	assert.Equal(nil, err2, "should be nil")
+	assert.Equal([]string{"127.0.0.1:3001"}, resp1.Member, "should be nil")
+	assert.Equal([]string{"127.0.0.1:4001"}, resp2.Member, "should be nil")
+
+	// ND1 LeaveCluster
+	_, err1 = ndclient1.LeaveCluster()
+	assert.Equal(nil, err1, "should be nil")
+
+	resp1, err1 = ndclient1.GetMembers()
+	resp2, err2 = ndclient2.GetMembers()
+	assert.Equal(nil, err1, "should be nil")
+	assert.Equal(nil, err2, "should be nil")
+	assert.Equal([]string(nil), resp1.Member, "should be nil")
+	assert.Equal([]string(nil), resp2.Member, "should be nil")
+}
+
 // go test -timeout 30s -run ^TestPublishOnProxy$ github.com/KelvinWu602/forus-core/p2p -v -count=1
 func TestPublishOnProxy(t *testing.T) {
 	// NormalNode.Publish
@@ -95,7 +156,9 @@ func TestPublishOnProxy(t *testing.T) {
 
 	var setup sync.WaitGroup
 	setup.Add(3)
-	mockND := NewMockND([]string{})
+	members := map[string][]string{}
+	members["127.0.0.1:3001"] = []string{}
+	mockND := NewMockND("127.0.0.1:3001", members, &sync.RWMutex{})
 	mockIS := NewMockIS()
 	go func() {
 		initMockND(mockND, "3200")
@@ -153,8 +216,12 @@ func TestPublishOnCover(t *testing.T) {
 	setup.Add(3)
 	// All component prefixed with 1 ==> Mock
 	// All component prefixed with 2 ==> Normal
-	mockND1 := NewMockND([]string{"127.0.0.1:3001"})
-	mockND2 := NewMockND([]string{"127.0.0.1:4001"})
+	members := map[string][]string{}
+	members["127.0.0.1:3001"] = []string{}
+	members["127.0.0.1:4001"] = []string{}
+	NDlock := sync.RWMutex{}
+	mockND1 := NewMockND("127.0.0.1:4001", members, &NDlock)
+	mockND2 := NewMockND("127.0.0.1:3001", members, &NDlock)
 
 	mockIS1 := NewMockIS()
 	mockIS2 := ShareCacheWith(mockIS1)

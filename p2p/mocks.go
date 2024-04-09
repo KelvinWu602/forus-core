@@ -20,34 +20,69 @@ import (
 
 // MockND implements node-discovery/protos/NodeDiscovery interface
 type MockND struct {
-	joined  bool
-	members []string
+	ownerAddr     string
+	members       map[string][]string //owner to owner's group
+	joinleavelock *sync.RWMutex
 }
 
-func NewMockND(members []string) *MockND {
-	return &MockND{joined: false, members: members}
+func NewMockND(ownerAddr string, members map[string][]string, joinleavelock *sync.RWMutex) *MockND {
+	return &MockND{ownerAddr: ownerAddr, members: members, joinleavelock: joinleavelock}
 }
 
 // communicate with a node specified by input IP address and join the cluster of that node. In case of any errors, log it and return “failed to join cluster” error.
-func (nd *MockND) JoinCluster(_ string) error {
-	nd.joined = true
+func (nd *MockND) JoinCluster(contact string) error {
+	nd.joinleavelock.Lock()
+	defer nd.joinleavelock.Unlock()
+
+	toJoin := nd.members[contact]
+	mygroup := nd.members[nd.ownerAddr]
+
+	for _, oldgroupmembers := range mygroup {
+		if oldgroupmembers == contact {
+			return nil
+		}
+	}
+
+	mygroup = append(mygroup, contact)
+
+	for _, newgroupmembers := range toJoin {
+		mygroup = append(mygroup, newgroupmembers)
+	}
+
+	toJoin = append(toJoin, nd.ownerAddr)
+
+	nd.members[contact] = toJoin
+	nd.members[nd.ownerAddr] = mygroup
 	return nil
 }
 
 // notify other nodes in the cluster that you are going to leave. Log it and return “failed to leave cluster” error.
 func (nd *MockND) LeaveCluster() error {
-	nd.joined = false
+	nd.joinleavelock.Lock()
+	defer nd.joinleavelock.Unlock()
+
+	for member, memberGroup := range nd.members {
+		if member != nd.ownerAddr {
+			for i, searchme := range memberGroup {
+				if searchme == nd.ownerAddr {
+					memberGroup = append(memberGroup[:i], memberGroup[i+1:]...)
+					nd.members[member] = memberGroup
+					break
+				}
+			}
+		} else {
+			delete(nd.members, nd.ownerAddr)
+		}
+	}
 	return nil
 }
 
 // Acquire the array of the IP addresses of all cluster members. These IP addresses are assumed to be alive.
 // Return error “node discovery service aborted” if underlying service is not running. Return error “failed to get member ip” otherwise.
 func (nd *MockND) GetMembers() ([]string, error) {
-	if nd.joined {
-		return nd.members, nil
-	} else {
-		return nil, nil
-	}
+	nd.joinleavelock.RLock()
+	defer nd.joinleavelock.RUnlock()
+	return nd.members[nd.ownerAddr], nil
 }
 
 // MockND implements node-discovery/protos/NodeDiscovery interface

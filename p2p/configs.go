@@ -67,6 +67,7 @@ func initConfigs(configFilePath string) *viper.Viper {
 	v.BindEnv("IMMUTABLE_STORAGE_SERVER_LISTEN_PORT")
 	v.BindEnv("TESTING_FLAG")
 	v.BindEnv("NODE_ALIAS")
+	v.BindEnv("CLUSTER_CONTACT_NODE_IP")
 	// bool
 	v.BindEnv("TESTING_FLAG")
 
