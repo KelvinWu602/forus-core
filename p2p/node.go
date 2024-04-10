@@ -724,7 +724,7 @@ func (n *Node) Publish(key is.Key, message []byte, targetPathId uuid.UUID) (uuid
 		pathID, pathProfile = pick(n.paths.data, nil)
 	} else {
 		pathID = targetPathId
-		pathProfile, found = n.paths.getValue(targetPathId)
+		pathProfile, found = n.paths.data[targetPathId]
 		if !found {
 			return uuid.Nil, errors.New("targetPathId does not exist")
 		}
