@@ -99,7 +99,7 @@ func (node *Node) invalidPathProfiles() []InvalidPathProfile {
 		for _, newPath := range resp.Paths {
 			newPathID, err := DecryptUUID(newPath.EncryptedTreeUUID, node.privateKey)
 			if err == nil && newPathID == pathID {
-				if oldPath.next2 != newPath.NextHop || !slices.Equal(oldPath.proxyPublic, newPath.ProxyPublicKey) {
+				if oldPath.next2 != newPath.NextHopIP || !slices.Equal(oldPath.proxyPublic, newPath.ProxyPublicKey) {
 					logMsg(node.name, "invalidPathProfiles", fmt.Sprintf("Invlid Path %v: inconsistent path data:\nlocal:%v\nresp:%v\n", pathID, oldPath, newPath))
 					// inconsistent path data, should fix local path
 					results = append(results, InvalidPathProfile{SelfProfile: oldPath, NextHopProfile: newPath, HandleType: FIX})
@@ -209,7 +209,7 @@ func (node *Node) maintainPathsHealthWorker() {
 				case CLEAN:
 					report.SelfProfile.cancelFunc(errors.New("invalid path was cleaned"))
 				case FIX:
-					report.SelfProfile.next2 = report.NextHopProfile.NextHop
+					report.SelfProfile.next2 = report.NextHopProfile.NextHopIP
 					report.SelfProfile.proxyPublic = report.NextHopProfile.ProxyPublicKey
 					node.paths.setValue(report.SelfProfile.uuid, report.SelfProfile)
 				}

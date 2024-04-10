@@ -346,7 +346,7 @@ func waitForResponse[RESPONSE_TYPE any](conn net.Conn, v *viper.Viper) (*RESPONS
 
 func (n *Node) sendQueryPathRequest(ip string) (*QueryPathResp, error) {
 	serialized, err := gobEncodeToBytes(QueryPathReq{
-		PublicKey: n.publicKey,
+		CoverPublicKey: n.publicKey,
 	})
 	if err != nil {
 		return nil, errGobEncodeMsg
@@ -361,7 +361,7 @@ func (n *Node) sendQueryPathRequest(ip string) (*QueryPathResp, error) {
 
 func (n *Node) sendVerifyCoverRequest(ip string, coverToBeVerified string) (*VerifyCoverResp, error) {
 	serialized, err := gobEncodeToBytes(VerifyCoverReq{
-		NextHop: coverToBeVerified,
+		NextHopIP: coverToBeVerified,
 	})
 	if err != nil {
 		return nil, errGobEncodeMsg
@@ -393,7 +393,7 @@ func (n *Node) sendConnectPathRequest(ip string, treeID uuid.UUID, n3X DHKeyExch
 
 	serialized, err := gobEncodeToBytes(ConnectPathReq{
 		EncryptedTreeUUID: encryptedTreeUUID,
-		KeyExchange:       n3X,
+		CoverKeyExchange:  n3X,
 	})
 	if err != nil {
 		return nil, nil, errGobEncodeMsg
@@ -411,8 +411,8 @@ func (n *Node) sendConnectPathRequest(ip string, treeID uuid.UUID, n3X DHKeyExch
 // request a proxy triggered by empty path in pathResp
 func (n *Node) sendCreateProxyRequest(ip string, n3X DHKeyExchange) (*CreateProxyResp, *TCPConnectionProfile, error) {
 	serialized, err := gobEncodeToBytes(CreateProxyReq{
-		KeyExchange: n3X,
-		PublicKey:   n.publicKey,
+		CoverPublicKey:   n.publicKey,
+		CoverKeyExchange: n3X,
 	})
 	if err != nil {
 		return nil, nil, errGobEncodeMsg
@@ -444,7 +444,7 @@ func (n *Node) QueryPath(ip string) (*QueryPathResp, []PathProfile, error) {
 	resp, err := n.sendQueryPathRequest(ip)
 	if err == nil {
 		// Cache the public key
-		n.peerPublicKeys.setValue(ip, resp.NodePublicKey)
+		n.peerPublicKeys.setValue(ip, resp.ParentPublicKey)
 
 		// Cache the verified paths as 'halfOpenPaths'
 		paths := resp.Paths
@@ -462,7 +462,7 @@ func (n *Node) QueryPath(ip string) (*QueryPathResp, []PathProfile, error) {
 			halfOpenPath := PathProfile{
 				uuid:        pathID,
 				next:        ip,
-				next2:       path.NextHop,
+				next2:       path.NextHopIP,
 				proxyPublic: path.ProxyPublicKey,
 				symKey:      big.Int{}, // placeholder
 			}
@@ -500,7 +500,7 @@ func (n *Node) ConnectPath(ip string, treeID uuid.UUID) (*ConnectPathResp, error
 		return nil, err
 	}
 
-	if resp.Status {
+	if resp.Accepted {
 		// retrieve the half open path profile
 		halfOpenPathProfile, found := n.halfOpenPath.getValue(treeID)
 		if !found {
@@ -517,7 +517,7 @@ func (n *Node) ConnectPath(ip string, treeID uuid.UUID) (*ConnectPathResp, error
 			next:         halfOpenPathProfile.next,
 			next2:        halfOpenPathProfile.next2,
 			proxyPublic:  halfOpenPathProfile.proxyPublic,
-			symKey:       resp.KeyExchange.GetSymKey(*myKeyExchangeSecret),
+			symKey:       resp.ParentKeyExchange.GetSymKey(*myKeyExchangeSecret),
 			successCount: 0,
 			failureCount: 0,
 			cancelFunc:   cancel,
@@ -548,7 +548,7 @@ func (n *Node) CreateProxy(ip string) (*CreateProxyResp, error) {
 		return resp, err
 	}
 
-	if resp.Status {
+	if resp.Accepted {
 		treeID, err := DecryptUUID(resp.EncryptedTreeUUID, n.privateKey)
 		if err != nil {
 			logMsg(n.name, "CreateProxy", fmt.Sprintf("Ends, Addr: %v : Error malformed encryptedTreeUUID", ip))
@@ -560,8 +560,8 @@ func (n *Node) CreateProxy(ip string) (*CreateProxyResp, error) {
 			uuid:         treeID,
 			next:         ip,
 			next2:        "ImmutableStorage",
-			proxyPublic:  resp.Public,
-			symKey:       resp.KeyExchange.GetSymKey(*myKeyExchangeSecret),
+			proxyPublic:  resp.ProxyPublicKey,
+			symKey:       resp.ProxyKeyExchange.GetSymKey(*myKeyExchangeSecret),
 			successCount: 0,
 			failureCount: 0,
 			cancelFunc:   cancel,
@@ -606,7 +606,7 @@ func (n *Node) MoveUp(pathID uuid.UUID) {
 		if resp.IsVerified {
 			// connectPath with originalNextNext, it will overwrite the current blacklist path
 			resp, err := n.ConnectPath(originalNextNext, pathID)
-			if err == nil && resp.Status {
+			if err == nil && resp.Accepted {
 				// if success, done
 				logMsg(n.name, "MoveUp", fmt.Sprintf("Ends, Path: %v:  Case: Successfully connected to next next hop", pathID.String()))
 				return
@@ -835,10 +835,10 @@ func (n *Node) handleQueryPathReq(conn net.Conn, content *QueryPathReq) error {
 	defer conn.Close()
 	// send response with QueryPathResp
 	queryPathResp := QueryPathResp{
-		NodePublicKey: n.publicKey,
-		Paths:         []Path{},
+		ParentPublicKey: n.publicKey,
+		Paths:           []Path{},
 	}
-	requesterPublicKey := content.PublicKey
+	requesterPublicKey := content.CoverPublicKey
 	if n.paths.getSize() > 0 {
 		n.paths.iterate(func(pathID uuid.UUID, path PathProfile) {
 			encryptedPathID, err := EncryptUUID(path.uuid, requesterPublicKey)
@@ -848,8 +848,8 @@ func (n *Node) handleQueryPathReq(conn net.Conn, content *QueryPathReq) error {
 			}
 			queryPathResp.Paths = append(queryPathResp.Paths, Path{
 				EncryptedTreeUUID: encryptedPathID,
-				NextHop:           path.next,
-				NextNextHop:       path.next2,
+				NextHopIP:         path.next,
+				NextNextHopIP:     path.next2,
 				ProxyPublicKey:    path.proxyPublic,
 			})
 		}, true)
@@ -865,7 +865,7 @@ func (n *Node) handleQueryPathReq(conn net.Conn, content *QueryPathReq) error {
 
 func (n *Node) handleVerifyCoverReq(conn net.Conn, content *VerifyCoverReq) error {
 	defer conn.Close()
-	coverToBeVerified := content.NextHop
+	coverToBeVerified := content.NextHopIP
 	_, isVerified := n.covers.getValue(coverToBeVerified)
 
 	verifyCoverResp := VerifyCoverResp{
@@ -906,7 +906,7 @@ func (n *Node) handleConnectPathReq(conn net.Conn, content *ConnectPathReq) erro
 			defer conn.Close()
 			return err
 		}
-		requesterKeyExchangeInfo := content.KeyExchange
+		requesterKeyExchangeInfo := content.CoverKeyExchange
 
 		lenInByte := 32
 		myKeyExchangeSecret := RandomBigInt(lenInByte)
@@ -925,13 +925,13 @@ func (n *Node) handleConnectPathReq(conn net.Conn, content *ConnectPathReq) erro
 		})
 
 		connectPathResponse = ConnectPathResp{
-			Status:      true,
-			KeyExchange: myKeyExchangeInfo,
+			Accepted:          true,
+			ParentKeyExchange: myKeyExchangeInfo,
 		}
 	} else {
 		connectPathResponse = ConnectPathResp{
-			Status:      false,
-			KeyExchange: DHKeyExchange{},
+			Accepted:          false,
+			ParentKeyExchange: DHKeyExchange{},
 		}
 	}
 	err = gob.NewEncoder(conn).Encode(connectPathResponse)
@@ -973,9 +973,9 @@ func (n *Node) handleCreateProxyReq(conn net.Conn, content *CreateProxyReq) erro
 
 		lenInByte := 32
 		myKeyExchangeSecret := RandomBigInt(lenInByte)
-		myKeyExchangeInfo := content.KeyExchange.GenerateReturn(*myKeyExchangeSecret)
-		secretKey := content.KeyExchange.GetSymKey(*myKeyExchangeSecret)
-		requesterPublicKey := content.PublicKey
+		myKeyExchangeInfo := content.CoverKeyExchange.GenerateReturn(*myKeyExchangeSecret)
+		secretKey := content.CoverKeyExchange.GetSymKey(*myKeyExchangeSecret)
+		requesterPublicKey := content.CoverPublicKey
 
 		// new path as self becomes the starting point of a new path
 		newPathID, _ := uuid.NewUUID()
@@ -1005,16 +1005,16 @@ func (n *Node) handleCreateProxyReq(conn net.Conn, content *CreateProxyReq) erro
 		}
 
 		createProxyResponse = CreateProxyResp{
-			Status:            true,
-			KeyExchange:       myKeyExchangeInfo,
-			Public:            n.publicKey,
+			Accepted:          true,
+			ProxyKeyExchange:  myKeyExchangeInfo,
+			ProxyPublicKey:    n.publicKey,
 			EncryptedTreeUUID: encryptedPathID,
 		}
 	} else {
 		createProxyResponse = CreateProxyResp{
-			Status:            false,
-			KeyExchange:       DHKeyExchange{},
-			Public:            []byte{},
+			Accepted:          false,
+			ProxyKeyExchange:  DHKeyExchange{},
+			ProxyPublicKey:    []byte{},
 			EncryptedTreeUUID: []byte{},
 		}
 	}
@@ -1283,7 +1283,7 @@ func (n *Node) handlePostPath(c *gin.Context) {
 			c.IndentedJSON(http.StatusInternalServerError, gin.H{"message": "connect path error", "error": err.Error()})
 			return
 		}
-		if !resp.Status {
+		if !resp.Accepted {
 			c.IndentedJSON(http.StatusInternalServerError, gin.H{"message": "target node deny"})
 			return
 		}
