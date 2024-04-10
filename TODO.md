@@ -83,3 +83,13 @@ Intermediate solution 2: TODO
 
 ## Frontend 
 ### 
+
+
+testing: error half open path not found is because
+when query path, send verify cover
+next next hop's cover profile for the middle node use key : 127.0.0.1:xxxxx 
+in essence on localhost, the only ID of a node is the server listening port
+but the cover node can only be identified by sending port != listening port anyway, will never be verified
+unless can fix the sending port, making it must be listening port +1
+
+then change verify condition logic to use breakhostport(content.nextHop).port+1 to reconstruct xxxxx

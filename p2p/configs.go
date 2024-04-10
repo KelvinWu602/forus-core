@@ -1,6 +1,7 @@
 package p2p
 
 import (
+	"log"
 	"time"
 
 	"github.com/spf13/viper"
@@ -20,27 +21,29 @@ func initConfigs(configFilePath string) *viper.Viper {
 	v.SetDefault("MAINTAIN_PATHS_HEALTH_CHECKING_INTERVAL", 1*time.Minute)
 	v.SetDefault("PUBLISH_CONDITION_CHECKING_INTERVAL", 1*time.Minute)
 	v.SetDefault("FULFILL_PUBLISH_CONDITION_TIMEOUT", 5*time.Minute)
-	v.SetDefault("FULFILL_PUBLISH_CONDITION_INTERVAL", 1*time.Second)
+	v.SetDefault("FULFILL_PUBLISH_CONDITION_INTERVAL", 10*time.Second)
 	// int
-	v.SetDefault("HALF_OPEN_PATH_BUFFER_SIZE", 10000)
-	v.SetDefault("TARGET_NUMBER_OF_CONNECTED_PATHS", 3)
+	v.SetDefault("HALF_OPEN_PATH_BUFFER_SIZE", 5000)
+	v.SetDefault("TARGET_NUMBER_OF_CONNECTED_PATHS", 1)
 	v.SetDefault("MAXIMUM_NUMBER_OF_COVER_NODES", 15)
 	v.SetDefault("NUMBER_OF_COVER_NODES_FOR_PUBLISH", 2)
 	v.SetDefault("MOVE_UP_REQUIREMENT_FAILURE_THRESHOLD", 3)
 	// string
-	v.SetDefault("TCP_SERVER_LISTEN_PORT", ":3001")
+	v.SetDefault("HTTP_SERVER_LISTEN_IP", "127.0.0.1")
 	v.SetDefault("HTTP_SERVER_LISTEN_PORT", ":3000")
-	v.SetDefault("NODE_DISCOVERY_SERVER_LISTEN_PORT", ":3200")
+
+	v.SetDefault("IMMUTABLE_STORAGE_SERVER_LISTEN_IP", "127.0.0.1")
 	v.SetDefault("IMMUTABLE_STORAGE_SERVER_LISTEN_PORT", ":3100")
-	// bool
-	v.SetDefault("TESTING_FLAG", false)
+
+	v.SetDefault("NODE_DISCOVERY_SERVER_LISTEN_IP", "127.0.0.1")
+	v.SetDefault("NODE_DISCOVERY_SERVER_LISTEN_PORT", ":3200")
 
 	// config.yaml
-	// project root folder, same level as main.go
+	// located at project root folder, same level as main.go
 	v.SetConfigFile(configFilePath)
 	err := v.ReadInConfig()
 	if err != nil {
-		logError("initConfigs", err, "failed to load config.yaml, use default configs")
+		log.Println("Error when initConfigs", err, "failed to load config.yaml, using default configs")
 	}
 
 	// environment variable override
@@ -61,15 +64,13 @@ func initConfigs(configFilePath string) *viper.Viper {
 	v.BindEnv("NUMBER_OF_COVER_NODES_FOR_PUBLISH")
 	v.BindEnv("MOVE_UP_REQUIREMENT_FAILURE_THRESHOLD")
 	// string
-	v.BindEnv("TCP_SERVER_LISTEN_PORT")
+	v.BindEnv("HTTP_SERVER_LISTEN_IP")
 	v.BindEnv("HTTP_SERVER_LISTEN_PORT")
-	v.BindEnv("NODE_DISCOVERY_SERVER_LISTEN_PORT")
-	v.BindEnv("IMMUTABLE_STORAGE_SERVER_LISTEN_PORT")
-	v.BindEnv("TESTING_FLAG")
-	v.BindEnv("NODE_ALIAS")
-	v.BindEnv("CLUSTER_CONTACT_NODE_IP")
-	// bool
-	v.BindEnv("TESTING_FLAG")
 
+	v.BindEnv("IMMUTABLE_STORAGE_SERVER_LISTEN_IP")
+	v.BindEnv("IMMUTABLE_STORAGE_SERVER_LISTEN_PORT")
+
+	v.BindEnv("NODE_DISCOVERY_SERVER_LISTEN_IP")
+	v.BindEnv("NODE_DISCOVERY_SERVER_LISTEN_PORT")
 	return v
 }

@@ -276,6 +276,11 @@ func TestPublishOnCover(t *testing.T) {
 	t.Log(resBody)
 	assert.Equal(1, cover.paths.getSize(), "cover should have 1 paths after post /path")
 	assert.Equal(1, proxy.covers.getSize(), "proxy should have 1 cover after post /path")
+	pathOnCover, _ := cover.paths.getValue(newPathID)
+	proxy.covers.iterate(func(coverIP string, coverProfile CoverNodeProfile) {
+		t.Log("Proxy covers:", coverIP, coverProfile)
+		assert.Equal(coverProfile.treeUUID, pathOnCover.uuid, "should have the same tree id")
+	}, true)
 
 	// post message on cover
 	body = fmt.Sprintf(`{"content": "%v"}`, testmessage)
@@ -304,6 +309,145 @@ func TestPublishOnCover(t *testing.T) {
 	assert.Equal(testmessagepayload, base64encodedContent, "content mismatch")
 }
 
+// go test -timeout 240s -run ^TestForwardOnCover$ github.com/KelvinWu602/forus-core/p2p -v -count=1
 func TestForwardOnCover(t *testing.T) {
 	// MockProxy <- NormalNode.Forward <- MockCover.Publish
+
+	assert := assert.New(t)
+	// N1.Proxy (3000,3001) <- N2.Forward (4000,4001) <- N3.Publish (5000,5001)
+	// IS1  (3100)          <==> IS2 (4100)        <==> IS3 (5100)
+	// ND1  (3200)          <==> ND2 (4200)        <==> ND3 (5200)
+
+	os.Setenv("NUMBER_OF_COVER_NODES_FOR_PUBLISH", "0")
+	os.Setenv("TARGET_NUMBER_OF_CONNECTED_PATHS", "0")
+
+	var setup sync.WaitGroup
+	setup.Add(4)
+	// All component prefixed with 1 ==> Mock
+	// All component prefixed with 2 ==> Normal
+	members := map[string][]string{}
+	members["127.0.0.1:3001"] = []string{}
+	members["127.0.0.1:4001"] = []string{}
+	members["127.0.0.1:5001"] = []string{}
+	NDlock := sync.RWMutex{}
+	mockND1 := NewMockND("127.0.0.1:3001", members, &NDlock)
+	mockND2 := NewMockND("127.0.0.1:4001", members, &NDlock)
+	mockND3 := NewMockND("127.0.0.1:5001", members, &NDlock)
+
+	mockIS1 := NewMockIS()
+	mockIS2 := ShareCacheWith(mockIS1)
+	mockIS3 := ShareCacheWith(mockIS1)
+
+	var N1, N2, N3 *Node
+	go func() {
+		initMockND(mockND1, "3200")
+		initMockND(mockND2, "4200")
+		initMockND(mockND3, "5200")
+
+		initMockIS(mockIS1, "3100")
+		initMockIS(mockIS2, "4100")
+		initMockIS(mockIS3, "5100")
+
+		setup.Done()
+	}()
+
+	go func() {
+		N1 = StartNodeInternal("../unit_test_configs/config-TestForwardOnCover-N1.yaml")
+		setup.Done()
+	}()
+
+	go func() {
+		N2 = StartNodeInternal("../unit_test_configs/config-TestForwardOnCover-N2.yaml")
+		setup.Done()
+	}()
+
+	go func() {
+		N3 = StartNodeInternal("../unit_test_configs/config-TestForwardOnCover-N3.yaml")
+		setup.Done()
+	}()
+	setup.Wait()
+
+	// http calls
+
+	// post path on N1
+	assert.Equal(0, N1.paths.getSize(), "N1 should have 0 paths at the beginning")
+	postpathres, resBody := sendPostRequest("http://localhost:3000/path", `{}`)
+	defer postpathres.Body.Close()
+	if postpathres.StatusCode != http.StatusOK {
+		t.Fatal(postpathres.StatusCode, postpathres.Status, resBody, "N1:POST /path: wrong status code")
+	}
+	t.Log(resBody)
+	assert.Equal(1, N1.paths.getSize(), "N1 should have 1 paths after post /path")
+	// need to get the pathID
+	var newPathID uuid.UUID
+	N1.paths.iterate(func(u uuid.UUID, _ PathProfile) {
+		newPathID = u
+	}, true)
+
+	// post path on N2
+	assert.Equal(0, N2.paths.getSize(), "N2 should have 0 paths at the beginning")
+	body := fmt.Sprintf(`{"ip":"127.0.0.1","port":"3001","path_id":"%v"}`, newPathID.String())
+	t.Log("post path on N2 body", body)
+	postpathres2, resBody := sendPostRequest("http://localhost:4000/path", body)
+	defer postpathres2.Body.Close()
+	if postpathres2.StatusCode != http.StatusOK {
+		t.Fatal(postpathres2.StatusCode, postpathres2.Status, resBody, "N2:POST /path: wrong status code")
+	}
+	t.Log(resBody)
+	assert.Equal(1, N2.paths.getSize(), "N2 should have 1 paths after post /path")
+	assert.Equal(1, N1.paths.getSize(), "N1 should have 1 paths after post /path")
+	assert.Equal(1, N1.covers.getSize(), "N1 should have 1 cover after post /path")
+	pathOnN2, _ := N2.paths.getValue(newPathID)
+	N1.covers.iterate(func(coverIP string, coverProfile CoverNodeProfile) {
+		t.Log("Proxy covers:", coverIP, coverProfile)
+		assert.Equal(coverProfile.treeUUID, pathOnN2.uuid, "N1 path and N2 path should have the same tree id")
+	}, true)
+
+	// post path on N3
+	assert.Equal(0, N3.paths.getSize(), "N3 should have 0 paths at the beginning")
+	body = fmt.Sprintf(`{"ip":"127.0.0.1","port":"4001","path_id":"%v"}`, newPathID.String())
+	t.Log("post path on N3 body", body)
+	postpathres3, resBody := sendPostRequest("http://localhost:5000/path", body)
+	defer postpathres3.Body.Close()
+	if postpathres3.StatusCode != http.StatusOK {
+		t.Fatal(postpathres3.StatusCode, postpathres3.Status, resBody, "N3:POST /path: wrong status code")
+	}
+	t.Log(resBody)
+	assert.Equal(1, N3.paths.getSize(), "N3 should have 1 paths after post /path")
+	assert.Equal(1, N2.paths.getSize(), "N2 should have 1 paths after post /path")
+	assert.Equal(1, N1.paths.getSize(), "N1 should have 1 paths after post /path")
+	assert.Equal(0, N3.covers.getSize(), "N3 should have 0 cover after post /path")
+	assert.Equal(1, N2.covers.getSize(), "N2 should have 1 cover after post /path")
+	assert.Equal(1, N1.covers.getSize(), "N1 should have 1 cover after post /path")
+	pathOnN3, _ := N3.paths.getValue(newPathID)
+	N2.covers.iterate(func(coverIP string, coverProfile CoverNodeProfile) {
+		t.Log("Proxy covers:", coverIP, coverProfile)
+		assert.Equal(coverProfile.treeUUID, pathOnN3.uuid, "should have the same tree id")
+	}, true)
+
+	// post message on N3
+	body = fmt.Sprintf(`{"content": "%v"}`, testmessage)
+	postmsgres, resBody := sendPostRequest(fmt.Sprintf("http://localhost:5000/message/%v", testkey), body)
+	defer postmsgres.Body.Close()
+	if postmsgres.StatusCode != http.StatusCreated {
+		t.Fatal(postmsgres.StatusCode, postmsgres.Status, resBody, "post msg on N3 wrong status code")
+	}
+	t.Log(resBody)
+
+	// wait for forward
+	time.Sleep(5 * time.Second)
+
+	// get message on N3
+	getmsgres, resBody := sendGetRequest(fmt.Sprintf("http://localhost:5000/message/%v", testkey))
+	defer getmsgres.Body.Close()
+	if getmsgres.StatusCode != http.StatusOK {
+		t.Fatal(getmsgres.StatusCode, getmsgres.Status, resBody, "get message wrong status code")
+	}
+	t.Log(resBody)
+
+	msg := HTTPSchemaMessage{}
+	err := json.Unmarshal([]byte(resBody), &msg)
+	base64encodedContent := base64.StdEncoding.EncodeToString(msg.Content)
+	assert.Equal(nil, err, "should have no unmarshal error")
+	assert.Equal(testmessagepayload, base64encodedContent, "content mismatch")
 }

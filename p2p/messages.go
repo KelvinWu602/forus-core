@@ -92,12 +92,15 @@ type QueryPathResp struct {
 
 type Path struct {
 	EncryptedTreeUUID []byte
-	NextHop           string
-	NextNextHop       string
-	ProxyPublicKey    []byte
+	// IP address of next hop
+	NextHop string
+	// IP address of next next hop
+	NextNextHop    string
+	ProxyPublicKey []byte
 }
 
 type VerifyCoverReq struct {
+	// IP address of next hop
 	NextHop string
 }
 
@@ -135,7 +138,6 @@ type HTTPPostMessageReq struct {
 
 type HTTPPostPathReq struct {
 	IP     string    `json:"ip,omitempty"`
-	Port   string    `json:"port,omitempty"`
 	PathID uuid.UUID `json:"path_id,omitempty"`
 }
 
@@ -182,7 +184,7 @@ func gobEncodeToBytes[T any](req T) ([]byte, error) {
 	buffer := bytes.NewBuffer([]byte{})
 	err := gob.NewEncoder(buffer).Encode(req)
 	if err != nil {
-		logError("gobEncodeToBytes", err, fmt.Sprintf("input = %v\n", req))
+		logError2("gobEncodeToBytes", err, fmt.Sprintf("input = %v\n", req))
 		return nil, err
 	}
 	return buffer.Bytes(), nil

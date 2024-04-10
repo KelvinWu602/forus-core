@@ -62,7 +62,7 @@ func (node *Node) blacklistPathIDs() []uuid.UUID {
 	results := []uuid.UUID{}
 	node.paths.iterate(func(pathID uuid.UUID, path PathProfile) {
 		if path.failureCount >= node.v.GetInt("MOVE_UP_REQUIREMENT_FAILURE_THRESHOLD") {
-			logMsg("blacklistPathIDs", fmt.Sprintf("Blacklist Path %v: failureCount = %v > %v = threshold", pathID, path.failureCount, node.v.GetInt("MOVE_UP_REQUIREMENT_FAILURE_THRESHOLD")))
+			logMsg(node.name, "blacklistPathIDs", fmt.Sprintf("Blacklist Path %v: failureCount = %v > %v = threshold", pathID, path.failureCount, node.v.GetInt("MOVE_UP_REQUIREMENT_FAILURE_THRESHOLD")))
 			results = append(results, pathID)
 		}
 	}, false)
@@ -86,11 +86,11 @@ func (node *Node) invalidPathProfiles() []InvalidPathProfile {
 		if oldPath.next == "ImmutableStorage" {
 			return
 		}
-		nextHopAddr := oldPath.next
-		resp, err := node.sendQueryPathRequest(nextHopAddr)
+		nextHopIp := oldPath.next
+		resp, err := node.sendQueryPathRequest(nextHopIp)
 		if err != nil {
 			// next-hop is unreachable, should clean this path
-			logMsg("invalidPathProfiles", fmt.Sprintf("Invlid Path %v: next-hop = %v is unreachable", pathID, nextHopAddr))
+			logMsg(node.name, "invalidPathProfiles", fmt.Sprintf("Invlid Path %v: next-hop = %v is unreachable", pathID, nextHopIp))
 			results = append(results, InvalidPathProfile{SelfProfile: oldPath, HandleType: CLEAN})
 			return
 		}
@@ -99,7 +99,7 @@ func (node *Node) invalidPathProfiles() []InvalidPathProfile {
 			newPathID, err := DecryptUUID(newPath.EncryptedTreeUUID, node.privateKey)
 			if err == nil && newPathID == pathID {
 				if oldPath.next2 != newPath.NextHop || !slices.Equal(oldPath.proxyPublic, newPath.ProxyPublicKey) {
-					logMsg("invalidPathProfiles", fmt.Sprintf("Invlid Path %v: inconsistent path data:\nlocal:%v\nresp:%v\n", pathID, oldPath, newPath))
+					logMsg(node.name, "invalidPathProfiles", fmt.Sprintf("Invlid Path %v: inconsistent path data:\nlocal:%v\nresp:%v\n", pathID, oldPath, newPath))
 					// inconsistent path data, should fix local path
 					results = append(results, InvalidPathProfile{SelfProfile: oldPath, NextHopProfile: newPath, HandleType: FIX})
 					return
@@ -110,7 +110,7 @@ func (node *Node) invalidPathProfiles() []InvalidPathProfile {
 		}
 
 		// cannot find this path on next-hop, should clean this path
-		logMsg("invalidPathProfiles", fmt.Sprintf("Invlid Path %v: path not found on next-hop = %v", pathID, nextHopAddr))
+		logMsg(node.name, "invalidPathProfiles", fmt.Sprintf("Invlid Path %v: path not found on next-hop = %v", pathID, nextHopIp))
 		results = append(results, InvalidPathProfile{SelfProfile: oldPath, HandleType: CLEAN})
 	}, true)
 
@@ -132,7 +132,7 @@ func (node *Node) canPublish(lock bool) bool {
 // publishJobStatusChecker will monitor the status of a publish job for a given timeout.
 func (node *Node) checkPublishJobStatusWorker(jobID uuid.UUID) {
 
-	logMsg("checkPublishJobStatusWorker", fmt.Sprintf("Started, JobID: %v", jobID.String()))
+	logMsg(node.name, "checkPublishJobStatusWorker", fmt.Sprintf("Started, JobID: %v", jobID.String()))
 
 	timeout := node.v.GetDuration("PUBLISH_JOB_FAILED_TIMEOUT")
 	checkInterval := node.v.GetDuration("PUBLISH_JOB_CHECKING_INTERVAL")
@@ -140,7 +140,7 @@ func (node *Node) checkPublishJobStatusWorker(jobID uuid.UUID) {
 	// check if the job really exists
 	publishJobProfile, jobExists := node.publishJobs.getValue(jobID)
 	if !jobExists {
-		logMsg("checkPublishJobStatusWorker", fmt.Sprintf("JobID %v does not exist", jobID.String()))
+		logMsg(node.name, "checkPublishJobStatusWorker", fmt.Sprintf("JobID %v does not exist", jobID.String()))
 		return
 	}
 
@@ -173,20 +173,20 @@ func (node *Node) checkPublishJobStatusWorker(jobID uuid.UUID) {
 	}
 	cancel()
 	node.markPublishJobStatus(jobID, publishJobProfile)
-	logMsg("checkPublishJobStatusWorker", fmt.Sprintf("Ended, JobID: %v, Status: %d", jobID.String(), publishJobProfile.Status))
+	logMsg(node.name, "checkPublishJobStatusWorker", fmt.Sprintf("Ended, JobID: %v, Status: %d", jobID.String(), publishJobProfile.Status))
 
 }
 
 func (node *Node) maintainPathsHealthWorker() {
 
-	logMsg("maintainPathsHealthWorker", fmt.Sprintf("Started, sleep interval = %v", node.v.GetDuration("MAINTAIN_PATHS_HEALTH_CHECKING_INTERVAL")))
+	logMsg(node.name, "maintainPathsHealthWorker", fmt.Sprintf("Started, sleep interval = %v", node.v.GetDuration("MAINTAIN_PATHS_HEALTH_CHECKING_INTERVAL")))
 
 	var moveUpWg sync.WaitGroup
 	var fixPathWg sync.WaitGroup
 	for {
-		logMsg("maintainPathsHealthWorker", "Iteration Starts")
+		logMsg(node.name, "maintainPathsHealthWorker", "Iteration Starts")
 		for _, pathID := range node.blacklistPathIDs() {
-			logMsg("maintainPathsHealthWorker", fmt.Sprintf("Handle blacklist path: %v", pathID))
+			logMsg(node.name, "maintainPathsHealthWorker", fmt.Sprintf("Handle blacklist path: %v", pathID))
 			moveUpWg.Add(1)
 			go func(pathID uuid.UUID) {
 				node.MoveUp(pathID)
@@ -194,10 +194,10 @@ func (node *Node) maintainPathsHealthWorker() {
 			}(pathID)
 		}
 		moveUpWg.Wait()
-		logMsg("maintainPathsHealthWorker", "Blacklist Paths Check Done")
+		logMsg(node.name, "maintainPathsHealthWorker", "Blacklist Paths Check Done")
 
 		for _, report := range node.invalidPathProfiles() {
-			logMsg("maintainPathsHealthWorker", fmt.Sprintf("Handle invalid path: %v %v", report.SelfProfile.uuid, report.HandleType))
+			logMsg(node.name, "maintainPathsHealthWorker", fmt.Sprintf("Handle invalid path: %v %v", report.SelfProfile.uuid, report.HandleType))
 			fixPathWg.Add(1)
 			go func(report InvalidPathProfile) {
 				switch report.HandleType {
@@ -212,15 +212,15 @@ func (node *Node) maintainPathsHealthWorker() {
 			}(report)
 		}
 		fixPathWg.Wait()
-		logMsg("maintainPathsHealthWorker", "Invalid Paths Check Done")
-		logMsg("maintainPathsHealthWorker", "Iteration Ends")
+		logMsg(node.name, "maintainPathsHealthWorker", "Invalid Paths Check Done")
+		logMsg(node.name, "maintainPathsHealthWorker", "Iteration Ends")
 		time.Sleep(node.v.GetDuration("MAINTAIN_PATHS_HEALTH_CHECKING_INTERVAL"))
 	}
 }
 
 func (node *Node) checkPublishConditionWorker() {
 
-	logMsg("checkPublishConditionWorker", fmt.Sprintf("Started, sleep interval = %v", node.v.GetDuration("PUBLISH_CONDITION_CHECKING_INTERVAL")))
+	logMsg(node.name, "checkPublishConditionWorker", fmt.Sprintf("Started, sleep interval = %v", node.v.GetDuration("PUBLISH_CONDITION_CHECKING_INTERVAL")))
 
 	for {
 
@@ -235,12 +235,12 @@ func (node *Node) checkPublishConditionWorker() {
 
 func (node *Node) sendCoverMessageWorker(connProfile *TCPConnectionProfile, pathID uuid.UUID) {
 	if connProfile == nil || connProfile.Conn == nil || connProfile.Encoder == nil {
-		logMsg("sendCoverMessageWorker", fmt.Sprintf("sendCoverMessageWorker on path %v failed to start due to connProfile = nil.", pathID.String()))
+		logMsg(node.name, "sendCoverMessageWorker", fmt.Sprintf("sendCoverMessageWorker on path %v failed to start due to connProfile = nil.", pathID.String()))
 		node.paths.deleteValue(pathID)
 		return
 	}
 	conn := *connProfile.Conn
-	logMsg("sendCoverMessageWorker", fmt.Sprintf("sendCoverMessageWorker to %s on path %v is started successfully.", conn.RemoteAddr().String(), pathID.String()))
+	logMsg(node.name, "sendCoverMessageWorker", fmt.Sprintf("sendCoverMessageWorker to %s on path %v is started successfully.", conn.RemoteAddr().String(), pathID.String()))
 	defer conn.Close()
 
 	encoder := connProfile.Encoder
@@ -269,28 +269,27 @@ func (node *Node) sendCoverMessageWorker(connProfile *TCPConnectionProfile, path
 		// check if terminated
 		select {
 		case err := <-doneErr:
-			logError("sendCoverMessageWorker", err, fmt.Sprintf("error when sending cover message to %s", conn.RemoteAddr().String()))
+			logError(node.name, "sendCoverMessageWorker", err, fmt.Sprintf("error when sending cover message to %s", conn.RemoteAddr().String()))
 			node.paths.deleteValue(pathID)
 			return
 		case <-doneSuccess:
 			// postpone tcp connection deadline
 			(*connProfile.Conn).SetDeadline(time.Now().Add(node.v.GetDuration("COVER_MESSAGE_SENDING_INTERVAL")).Add(time.Minute))
-			logMsg("sendCoverMessageWorker", fmt.Sprintf("cover message to %s on path %v is sent successfully.", conn.RemoteAddr().String(), pathID.String()))
+			logMsg(node.name, "sendCoverMessageWorker", fmt.Sprintf("cover message to %s on path %v is sent successfully.", conn.RemoteAddr().String(), pathID.String()))
 			time.Sleep(node.v.GetDuration("COVER_MESSAGE_SENDING_INTERVAL"))
 		}
 	}
 }
 
-func (node *Node) handleApplicationMessageWorker(conn net.Conn, coverProfileKey string) {
-	defer node.covers.deleteValue(coverProfileKey)
+func (node *Node) handleApplicationMessageWorker(conn net.Conn, coverIp string) {
+	defer node.covers.deleteValue(coverIp)
 	if conn == nil {
-		logMsg("handleApplicationMessageWorker", fmt.Sprintf("handleApplicationMessageWorker failed to start due to conn = nil, CoverIP = %v.", coverProfileKey))
+		logMsg(node.name, "handleApplicationMessageWorker", fmt.Sprintf("handleApplicationMessageWorker failed to start due to conn = nil, CoverIP = %v.", coverIp))
 		return
 	}
 	defer conn.Close()
-	logMsg("handleApplicationMessageWorker", fmt.Sprintf("handleApplicationMessageWorker from %s is started", conn.RemoteAddr().String()))
+	logMsg(node.name, "handleApplicationMessageWorker", fmt.Sprintf("handleApplicationMessageWorker from %s is started", conn.RemoteAddr().String()))
 
-	coverIp := conn.RemoteAddr().String()
 	decoder := gob.NewDecoder(conn)
 
 	doneSuccess := make(chan ApplicationMessage)
@@ -313,24 +312,24 @@ func (node *Node) handleApplicationMessageWorker(conn net.Conn, coverProfileKey 
 
 			coverProfile, found := node.covers.getValue(coverIp)
 			if !found {
-				logMsg("handleApplicationMessageWorker", fmt.Sprintf("[Cover Not Found]:failed to handle application message from %v", coverIp))
+				logMsg(node.name, "handleApplicationMessageWorker", fmt.Sprintf("[Cover Not Found]:failed to handle application message from %v", coverIp))
 				return
 			}
 			forwardPathProfile, found := node.paths.getValue(coverProfile.treeUUID)
 			if !found {
-				logMsg("handleApplicationMessageWorker", fmt.Sprintf("[Path Not Found]:failed to handle application message from %v to path %v", coverIp, coverProfile.treeUUID))
+				logMsg(node.name, "handleApplicationMessageWorker", fmt.Sprintf("[Path Not Found]:failed to handle application message from %v to path %v", coverIp, coverProfile.treeUUID))
 				return
 			}
 
 			// in the whole handleApplicationMessage scope, should assume coverProfile and forwardPathProfile are valid
 			if err := node.handleApplicationMessage(msg, coverProfile, forwardPathProfile); err != nil {
-				logError("handleApplicationMessageWorker", err, fmt.Sprintf("failed to handle application message from %v to path %v: %v", coverIp, coverProfile.treeUUID, msg))
+				logError(node.name, "handleApplicationMessageWorker", err, fmt.Sprintf("failed to handle application message from %v to path %v: %v", coverIp, coverProfile.treeUUID, msg))
 			}
 		case err := <-doneErr:
-			logError("handleApplicationMessageWorker", err, fmt.Sprintf("error when receiving application message from %s", conn.RemoteAddr().String()))
+			logError(node.name, "handleApplicationMessageWorker", err, fmt.Sprintf("error when receiving application message from %s", conn.RemoteAddr().String()))
 			return
 		case <-time.After(node.v.GetDuration("APPLICATION_MESSAGE_RECEIVING_INTERVAL")):
-			logMsg("handleApplicationMessageWorker", fmt.Sprintf("handleApplicationMessageWorker from %s: COVER MESSAGE TIMEOUT.\n", conn.RemoteAddr().String()))
+			logMsg(node.name, "handleApplicationMessageWorker", fmt.Sprintf("handleApplicationMessageWorker from %s: COVER MESSAGE TIMEOUT.\n", conn.RemoteAddr().String()))
 			return
 		}
 	}

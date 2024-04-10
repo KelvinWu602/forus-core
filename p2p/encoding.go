@@ -48,20 +48,20 @@ func NewCoverMessage(proxyPublicKey []byte, symmetricKey big.Int) (*ApplicationM
 }
 
 func NewRealMessage(dm DataMessage, proxyPublicKey []byte, symmetricKey big.Int) (*ApplicationMessage, error) {
-	logMsg("NewRealMessage", fmt.Sprintf("dm = %v\nproxyPublicKey = %v\nsymmetricKey = %v\n", dm, proxyPublicKey, symmetricKey))
+	logMsg2("NewRealMessage", fmt.Sprintf("dm = %v\nproxyPublicKey = %v\nsymmetricKey = %v\n", dm, proxyPublicKey, symmetricKey))
 	asymInput, err := dm.CreateAsymmetricEncryptionInput()
 	if err != nil {
-		logError("NewRealMessage", err, "dm.CreateAsymmetricEncryptionInput()")
+		logError2("NewRealMessage", err, "dm.CreateAsymmetricEncryptionInput()")
 		return nil, err
 	}
 	asymInputBytes, err := asymInput.ToBytes()
 	if err != nil {
-		logError("NewRealMessage", err, "asymInput.ToBytes()")
+		logError2("NewRealMessage", err, "asymInput.ToBytes()")
 		return nil, err
 	}
 	asymOutput, err := AsymmetricEncrypt(asymInputBytes, proxyPublicKey)
 	if err != nil {
-		logError("NewRealMessage", err, "AsymmetricEncrypt(asymInputBytes, proxyPublicKey)")
+		logError2("NewRealMessage", err, "AsymmetricEncrypt(asymInputBytes, proxyPublicKey)")
 		return nil, err
 	}
 	symInput := SymmetricEncryptDataMessage{
@@ -70,12 +70,12 @@ func NewRealMessage(dm DataMessage, proxyPublicKey []byte, symmetricKey big.Int)
 	}
 	symInputBytes, err := symInput.ToBytes()
 	if err != nil {
-		logError("NewRealMessage", err, "symInput.ToBytes()")
+		// logError2("NewRealMessage", err, "symInput.ToBytes()")
 		return nil, err
 	}
 	symOutput, err := SymmetricEncrypt(symInputBytes, symmetricKey)
 	if err != nil {
-		logError("NewRealMessage", err, "SymmetricEncrypt(symInputBytes, symmetricKey)")
+		logError2("NewRealMessage", err, "SymmetricEncrypt(symInputBytes, symmetricKey)")
 		return nil, err
 	}
 

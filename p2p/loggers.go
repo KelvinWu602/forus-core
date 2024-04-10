@@ -1,7 +1,7 @@
 package p2p
 
 import (
-	"log"
+	"fmt"
 	"net"
 	"runtime"
 )
@@ -15,14 +15,56 @@ func getCallerName() string {
 	return "unknown caller"
 }
 
-func logProtocolMessageHandlerError(handlerName string, tcpConn net.Conn, err error, input any) {
-	log.Printf("[%s.%s@%s]:Error:%s\nInput:\n%v\n", getCallerName(), handlerName, tcpConn.RemoteAddr().String(), err, input)
+func msg(nodeName string, triggerPoint string, msg string) string {
+	return fmt.Sprintf(
+		`Log from %v at
+			caller: %v
+			callee: %v
+				%v
+		`,
+		getCallerName(),
+		triggerPoint,
+		msg,
+	)
 }
 
-func logMsg(funcName string, msg string) {
-	log.Printf("[%s.%s]:Log:%s\n", getCallerName(), funcName, msg)
+func logProtocolMessageHandlerError(nodeName string, handlerName string, conn net.Conn, err error, input any) {
+	// the TCP address that the TCP server listen at
+	m := fmt.Sprintf(
+		`Protocol Message Handle Error: from = %v, input = %v
+		%v`,
+		conn.RemoteAddr().String(),
+		input,
+		err,
+	)
+
+	fmt.Print(msg(nodeName, handlerName, m))
 }
 
-func logError(funcName string, err error, description string) {
-	log.Printf("[%s.%s]:Error:%s\n%s\n", getCallerName(), funcName, description, err)
+func logMsg(nodeName string, funcName string, m string) {
+	fmt.Print(msg(nodeName, funcName, m))
+}
+
+func logError(nodeName string, funcName string, err error, description string) {
+	m := fmt.Sprintf(
+		`%v
+		%v`,
+		description,
+		err,
+	)
+	fmt.Print(msg(nodeName, funcName, m))
+}
+
+func logMsg2(funcName string, m string) {
+	fmt.Print(msg("", funcName, m))
+}
+
+func logError2(funcName string, err error, description string) {
+	m := fmt.Sprintf(
+		`%v
+		%v`,
+		description,
+		err,
+	)
+	fmt.Print(msg("", funcName, m))
 }
