@@ -2,6 +2,7 @@ package p2p
 
 import (
 	"fmt"
+	"log"
 	"net"
 	"runtime"
 )
@@ -18,10 +19,11 @@ func getCallerName() string {
 func msg(nodeName string, triggerPoint string, msg string) string {
 	return fmt.Sprintf(
 		`Log from %v at
-			caller: %v
-			callee: %v
-				%v
-		`,
+	caller: %v
+	callee: %v
+		%v
+
+`,
 		nodeName,
 		getCallerName(),
 		triggerPoint,
@@ -33,39 +35,39 @@ func logProtocolMessageHandlerError(nodeName string, handlerName string, conn ne
 	// the TCP address that the TCP server listen at
 	m := fmt.Sprintf(
 		`Protocol Message Handle Error: from = %v, input = %v
-		%v`,
+	%v`,
 		conn.RemoteAddr().String(),
 		input,
 		err,
 	)
 
-	fmt.Print(msg(nodeName, handlerName, m))
+	log.Println(msg(nodeName, handlerName, m))
 }
 
 func logMsg(nodeName string, funcName string, m string) {
-	fmt.Print(msg(nodeName, funcName, m))
+	log.Println(msg(nodeName, funcName, m))
 }
 
 func logError(nodeName string, funcName string, err error, description string) {
 	m := fmt.Sprintf(
 		`%v
-		%v`,
+	%v`,
 		description,
 		err,
 	)
-	fmt.Print(msg(nodeName, funcName, m))
+	log.Println(msg(nodeName, funcName, m))
 }
 
 func logMsg2(funcName string, m string) {
-	fmt.Print(msg("", funcName, m))
+	log.Println(msg("", funcName, m))
 }
 
 func logError2(funcName string, err error, description string) {
 	m := fmt.Sprintf(
 		`%v
-		%v`,
+	%v`,
 		description,
 		err,
 	)
-	fmt.Print(msg("", funcName, m))
+	log.Println(msg("", funcName, m))
 }

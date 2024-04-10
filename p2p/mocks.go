@@ -139,8 +139,8 @@ func (m *MockIS) IsDiscovered(key blueprint.Key) bool {
 	return discovered
 }
 
-func initMockIS(mock *MockIS, port string) *grpc.Server {
-	lis, err := net.Listen("tcp", "localhost:"+port)
+func initMockIS(mock *MockIS, addr string) *grpc.Server {
+	lis, err := net.Listen("tcp", addr)
 	if err != nil {
 		log.Println(err)
 		os.Exit(1)
@@ -155,7 +155,7 @@ func initMockIS(mock *MockIS, port string) *grpc.Server {
 
 	// Wait until the Mock Server is ready
 	i := 1
-	for conn, err := grpc.Dial("localhost"+port, grpc.WithInsecure()); err != nil; {
+	for conn, err := grpc.Dial(addr, grpc.WithInsecure()); err != nil; {
 		log.Printf("Test call %v %s\n", i, err)
 		if conn != nil {
 			conn.Close()
@@ -167,8 +167,8 @@ func initMockIS(mock *MockIS, port string) *grpc.Server {
 	return gs
 }
 
-func initMockND(mock *MockND, port string) *grpc.Server {
-	lis, err := net.Listen("tcp", "localhost:"+port)
+func initMockND(mock *MockND, addr string) *grpc.Server {
+	lis, err := net.Listen("tcp", addr)
 	if err != nil {
 		log.Println(err)
 		os.Exit(1)
@@ -183,7 +183,7 @@ func initMockND(mock *MockND, port string) *grpc.Server {
 
 	// Wait until the Mock Server is ready
 	i := 1
-	for conn, err := grpc.Dial("localhost"+port, grpc.WithInsecure()); err != nil; {
+	for conn, err := grpc.Dial(addr, grpc.WithInsecure()); err != nil; {
 		log.Printf("Test call %v %s\n", i, err)
 		if conn != nil {
 			conn.Close()

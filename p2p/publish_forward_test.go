@@ -53,35 +53,35 @@ func sendGetRequest(url string) (*http.Response, string) {
 	return resp, bodyString
 }
 
+// go test -timeout 30s -run ^TestConfigs$ github.com/KelvinWu602/forus-core/p2p -v -count=1
 func TestConfigs(t *testing.T) {
-	// NormalNode.Publish
-
 	os.Setenv("NUMBER_OF_COVER_NODES_FOR_PUBLISH", "0")
 	os.Setenv("TARGET_NUMBER_OF_CONNECTED_PATHS", "0")
+	os.Setenv("GIN_MODE", "release")
 
 	var setup sync.WaitGroup
 	setup.Add(3)
 	members := map[string][]string{}
-	members["127.0.0.1:3001"] = []string{}
-	mockND := NewMockND("127.0.0.1:3001", members, &sync.RWMutex{})
+	members["127.0.0.1"] = []string{}
+	mockND := NewMockND("127.0.0.1", members, &sync.RWMutex{})
 	mockIS := NewMockIS()
 	go func() {
-		initMockND(mockND, "3201")
+		initMockND(mockND, "3200")
 		setup.Done()
 	}()
 	go func() {
-		initMockIS(mockIS, "3101")
+		initMockIS(mockIS, "3100")
 		setup.Done()
 	}()
 	go func() {
-		StartNodeInternal("../unit_test_configs/config-TestPublishOnCover-Proxy.yaml")
+		StartNodeInternal("../unit_test_configs/config-TestPublishOnProxy.yaml")
 		setup.Done()
 	}()
 	setup.Wait()
 
 	// http calls
 	// get configs
-	res, resBody := sendGetRequest("http://localhost:4000/configs")
+	res, resBody := sendGetRequest("http://localhost:3000/configs")
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
 		t.Fatal(res.StatusCode, res.Status, resBody, "get configs wrong status code")
@@ -157,8 +157,8 @@ func TestPublishOnProxy(t *testing.T) {
 	var setup sync.WaitGroup
 	setup.Add(3)
 	members := map[string][]string{}
-	members["127.0.0.1:3001"] = []string{}
-	mockND := NewMockND("127.0.0.1:3001", members, &sync.RWMutex{})
+	members["127.0.0.1"] = []string{}
+	mockND := NewMockND("127.0.0.1", members, &sync.RWMutex{})
 	mockIS := NewMockIS()
 	go func() {
 		initMockND(mockND, "3200")
@@ -205,9 +205,8 @@ func TestPublishOnProxy(t *testing.T) {
 // go test -timeout 120s -run ^TestPublishOnCover$ github.com/KelvinWu602/forus-core/p2p -v -count=1
 func TestPublishOnCover(t *testing.T) {
 	assert := assert.New(t)
-	// MockProxy (4000,4001) <- NormalNode.Publish (3000,3001)
-	// MockProxy.IS (3101) <==> NormalNode.IS (3100)
-	// MockProxy.ND (3201) <==> NormalNode.ND (3200)
+	// Proxy (127.0.0.1)
+	// Cover (127.0.0.2)
 
 	os.Setenv("NUMBER_OF_COVER_NODES_FOR_PUBLISH", "0")
 	os.Setenv("TARGET_NUMBER_OF_CONNECTED_PATHS", "0")
@@ -217,11 +216,11 @@ func TestPublishOnCover(t *testing.T) {
 	// All component prefixed with 1 ==> Mock
 	// All component prefixed with 2 ==> Normal
 	members := map[string][]string{}
-	members["127.0.0.1:3001"] = []string{}
-	members["127.0.0.1:4001"] = []string{}
+	members["127.0.0.1"] = []string{}
+	members["127.0.0.2"] = []string{}
 	NDlock := sync.RWMutex{}
-	mockND1 := NewMockND("127.0.0.1:4001", members, &NDlock)
-	mockND2 := NewMockND("127.0.0.1:3001", members, &NDlock)
+	mockND1 := NewMockND("127.0.0.1", members, &NDlock)
+	mockND2 := NewMockND("127.0.0.2", members, &NDlock)
 
 	mockIS1 := NewMockIS()
 	mockIS2 := ShareCacheWith(mockIS1)
@@ -229,10 +228,10 @@ func TestPublishOnCover(t *testing.T) {
 	var proxy, cover *Node
 
 	go func() {
-		initMockND(mockND1, "3201")
-		initMockIS(mockIS1, "3101")
-		initMockND(mockND2, "3200")
-		initMockIS(mockIS2, "3100")
+		initMockND(mockND1, "127.0.0.1:3200")
+		initMockND(mockND2, "127.0.0.2:3200")
+		initMockIS(mockIS1, "127.0.0.1:3100")
+		initMockIS(mockIS2, "127.0.0.2:3100")
 		setup.Done()
 	}()
 
@@ -251,7 +250,7 @@ func TestPublishOnCover(t *testing.T) {
 
 	// post path on proxy
 	assert.Equal(0, proxy.paths.getSize(), "proxy should have 0 paths at the beginning")
-	postpathres, resBody := sendPostRequest("http://localhost:4000/path", `{}`)
+	postpathres, resBody := sendPostRequest("http://127.0.0.1:3000/path", `{}`)
 	defer postpathres.Body.Close()
 	if postpathres.StatusCode != http.StatusOK {
 		t.Fatal(postpathres.StatusCode, postpathres.Status, resBody, "post path on proxy wrong status code")
@@ -266,9 +265,9 @@ func TestPublishOnCover(t *testing.T) {
 
 	// post path on cover
 	assert.Equal(0, cover.paths.getSize(), "cover should have 0 paths at the beginning")
-	body := fmt.Sprintf(`{"ip":"127.0.0.1","port":"4001","path_id":"%v"}`, newPathID.String())
+	body := fmt.Sprintf(`{"ip":"127.0.0.1","path_id":"%v"}`, newPathID.String())
 	t.Log("post path on cover body", body)
-	postpathres2, resBody := sendPostRequest("http://localhost:3000/path", body)
+	postpathres2, resBody := sendPostRequest("http://127.0.0.2:3000/path", body)
 	defer postpathres2.Body.Close()
 	if postpathres.StatusCode != http.StatusOK {
 		t.Fatal(postpathres.StatusCode, postpathres.Status, resBody, "post path on cover wrong status code")
@@ -284,7 +283,7 @@ func TestPublishOnCover(t *testing.T) {
 
 	// post message on cover
 	body = fmt.Sprintf(`{"content": "%v"}`, testmessage)
-	postmsgres, resBody := sendPostRequest(fmt.Sprintf("http://localhost:3000/message/%v", testkey), body)
+	postmsgres, resBody := sendPostRequest(fmt.Sprintf("http://127.0.0.2:3000/message/%v", testkey), body)
 	defer postmsgres.Body.Close()
 	if postmsgres.StatusCode != http.StatusCreated {
 		t.Fatal(postmsgres.StatusCode, postmsgres.Status, resBody, "post msg on cover wrong status code")
@@ -295,7 +294,7 @@ func TestPublishOnCover(t *testing.T) {
 	time.Sleep(3 * time.Second)
 
 	// get message
-	getmsgres, resBody := sendGetRequest(fmt.Sprintf("http://localhost:3000/message/%v", testkey))
+	getmsgres, resBody := sendGetRequest(fmt.Sprintf("http://127.0.0.2:3000/message/%v", testkey))
 	defer getmsgres.Body.Close()
 	if getmsgres.StatusCode != http.StatusOK {
 		t.Fatal(getmsgres.StatusCode, getmsgres.Status, resBody, "get message wrong status code")
@@ -311,12 +310,11 @@ func TestPublishOnCover(t *testing.T) {
 
 // go test -timeout 240s -run ^TestForwardOnCover$ github.com/KelvinWu602/forus-core/p2p -v -count=1
 func TestForwardOnCover(t *testing.T) {
-	// MockProxy <- NormalNode.Forward <- MockCover.Publish
+	// N1 127.0.0.1
+	// N2 127.0.0.2
+	// N3 127.0.0.3
 
 	assert := assert.New(t)
-	// N1.Proxy (3000,3001) <- N2.Forward (4000,4001) <- N3.Publish (5000,5001)
-	// IS1  (3100)          <==> IS2 (4100)        <==> IS3 (5100)
-	// ND1  (3200)          <==> ND2 (4200)        <==> ND3 (5200)
 
 	os.Setenv("NUMBER_OF_COVER_NODES_FOR_PUBLISH", "0")
 	os.Setenv("TARGET_NUMBER_OF_CONNECTED_PATHS", "0")
@@ -326,13 +324,13 @@ func TestForwardOnCover(t *testing.T) {
 	// All component prefixed with 1 ==> Mock
 	// All component prefixed with 2 ==> Normal
 	members := map[string][]string{}
-	members["127.0.0.1:3001"] = []string{}
-	members["127.0.0.1:4001"] = []string{}
-	members["127.0.0.1:5001"] = []string{}
+	members["127.0.0.1"] = []string{}
+	members["127.0.0.2"] = []string{}
+	members["127.0.0.3"] = []string{}
 	NDlock := sync.RWMutex{}
-	mockND1 := NewMockND("127.0.0.1:3001", members, &NDlock)
-	mockND2 := NewMockND("127.0.0.1:4001", members, &NDlock)
-	mockND3 := NewMockND("127.0.0.1:5001", members, &NDlock)
+	mockND1 := NewMockND("127.0.0.1", members, &NDlock)
+	mockND2 := NewMockND("127.0.0.2", members, &NDlock)
+	mockND3 := NewMockND("127.0.0.3", members, &NDlock)
 
 	mockIS1 := NewMockIS()
 	mockIS2 := ShareCacheWith(mockIS1)
@@ -340,13 +338,13 @@ func TestForwardOnCover(t *testing.T) {
 
 	var N1, N2, N3 *Node
 	go func() {
-		initMockND(mockND1, "3200")
-		initMockND(mockND2, "4200")
-		initMockND(mockND3, "5200")
+		initMockND(mockND1, "127.0.0.1:3200")
+		initMockND(mockND2, "127.0.0.2:3200")
+		initMockND(mockND3, "127.0.0.3:3200")
 
-		initMockIS(mockIS1, "3100")
-		initMockIS(mockIS2, "4100")
-		initMockIS(mockIS3, "5100")
+		initMockIS(mockIS1, "127.0.0.1:3100")
+		initMockIS(mockIS2, "127.0.0.2:3100")
+		initMockIS(mockIS3, "127.0.0.3:3100")
 
 		setup.Done()
 	}()
@@ -371,7 +369,7 @@ func TestForwardOnCover(t *testing.T) {
 
 	// post path on N1
 	assert.Equal(0, N1.paths.getSize(), "N1 should have 0 paths at the beginning")
-	postpathres, resBody := sendPostRequest("http://localhost:3000/path", `{}`)
+	postpathres, resBody := sendPostRequest("http://127.0.0.1:3000/path", `{}`)
 	defer postpathres.Body.Close()
 	if postpathres.StatusCode != http.StatusOK {
 		t.Fatal(postpathres.StatusCode, postpathres.Status, resBody, "N1:POST /path: wrong status code")
@@ -386,9 +384,9 @@ func TestForwardOnCover(t *testing.T) {
 
 	// post path on N2
 	assert.Equal(0, N2.paths.getSize(), "N2 should have 0 paths at the beginning")
-	body := fmt.Sprintf(`{"ip":"127.0.0.1","port":"3001","path_id":"%v"}`, newPathID.String())
+	body := fmt.Sprintf(`{"ip":"127.0.0.2","path_id":"%v"}`, newPathID.String())
 	t.Log("post path on N2 body", body)
-	postpathres2, resBody := sendPostRequest("http://localhost:4000/path", body)
+	postpathres2, resBody := sendPostRequest("http://127.0.0.2:3000/path", body)
 	defer postpathres2.Body.Close()
 	if postpathres2.StatusCode != http.StatusOK {
 		t.Fatal(postpathres2.StatusCode, postpathres2.Status, resBody, "N2:POST /path: wrong status code")
@@ -405,9 +403,9 @@ func TestForwardOnCover(t *testing.T) {
 
 	// post path on N3
 	assert.Equal(0, N3.paths.getSize(), "N3 should have 0 paths at the beginning")
-	body = fmt.Sprintf(`{"ip":"127.0.0.1","port":"4001","path_id":"%v"}`, newPathID.String())
+	body = fmt.Sprintf(`{"ip":"127.0.0.3","path_id":"%v"}`, newPathID.String())
 	t.Log("post path on N3 body", body)
-	postpathres3, resBody := sendPostRequest("http://localhost:5000/path", body)
+	postpathres3, resBody := sendPostRequest("http://127.0.0.3:3000/path", body)
 	defer postpathres3.Body.Close()
 	if postpathres3.StatusCode != http.StatusOK {
 		t.Fatal(postpathres3.StatusCode, postpathres3.Status, resBody, "N3:POST /path: wrong status code")
@@ -427,7 +425,7 @@ func TestForwardOnCover(t *testing.T) {
 
 	// post message on N3
 	body = fmt.Sprintf(`{"content": "%v"}`, testmessage)
-	postmsgres, resBody := sendPostRequest(fmt.Sprintf("http://localhost:5000/message/%v", testkey), body)
+	postmsgres, resBody := sendPostRequest(fmt.Sprintf("http://127.0.0.3:3000/message/%v", testkey), body)
 	defer postmsgres.Body.Close()
 	if postmsgres.StatusCode != http.StatusCreated {
 		t.Fatal(postmsgres.StatusCode, postmsgres.Status, resBody, "post msg on N3 wrong status code")
@@ -438,7 +436,7 @@ func TestForwardOnCover(t *testing.T) {
 	time.Sleep(5 * time.Second)
 
 	// get message on N3
-	getmsgres, resBody := sendGetRequest(fmt.Sprintf("http://localhost:5000/message/%v", testkey))
+	getmsgres, resBody := sendGetRequest(fmt.Sprintf("http://127.0.0.3:3000/message/%v", testkey))
 	defer getmsgres.Body.Close()
 	if getmsgres.StatusCode != http.StatusOK {
 		t.Fatal(getmsgres.StatusCode, getmsgres.Status, resBody, "get message wrong status code")
