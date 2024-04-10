@@ -118,6 +118,10 @@ func (node *Node) invalidPathProfiles() []InvalidPathProfile {
 	return results
 }
 
+func (node *Node) needMorePaths() bool {
+	return node.paths.getSize() < node.v.GetInt("TARGET_NUMBER_OF_CONNECTED_PATHS")
+}
+
 func (node *Node) canPublish(lock bool) bool {
 	if lock {
 		return node.covers.getSize() >= node.v.GetInt("NUMBER_OF_COVER_NODES_FOR_PUBLISH") &&
@@ -219,14 +223,14 @@ func (node *Node) maintainPathsHealthWorker() {
 	}
 }
 
-func (node *Node) checkPublishConditionWorker() {
+func (node *Node) maintainPathQuantityWorker() {
 
 	logMsg(node.name, "checkPublishConditionWorker", fmt.Sprintf("Started, sleep interval = %v", node.v.GetDuration("PUBLISH_CONDITION_CHECKING_INTERVAL")))
 
 	for {
 
-		if !node.canPublish(true) {
-			node.fulfillPublishCondition()
+		if node.needMorePaths() {
+			node.getMorePaths()
 		}
 
 		time.Sleep(node.v.GetDuration("PUBLISH_CONDITION_CHECKING_INTERVAL"))

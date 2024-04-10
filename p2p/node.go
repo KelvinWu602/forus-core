@@ -69,7 +69,7 @@ func StartNodeInternal(configPath string) *Node {
 	// after joined a cluster, start process user request
 	go node.StartHTTP()
 
-	go node.checkPublishConditionWorker()
+	go node.maintainPathQuantityWorker()
 	go node.maintainPathsHealthWorker()
 
 	return node
@@ -647,7 +647,7 @@ func (n *Node) deletePathAndRelatedCovers(pathID uuid.UUID) {
 }
 
 // Tree Formation Process by aggregating QueryPath, CreateProxy, ConnectPath & joining cluster
-func (n *Node) fulfillPublishCondition() {
+func (n *Node) getMorePaths() {
 
 	logMsg(n.name, "fulfillPublishCondition", "Started")
 
