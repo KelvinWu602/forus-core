@@ -293,11 +293,11 @@ func (n *Node) getMorePaths() {
 		logMsg(n.name, "fulfillPublishCondition", "Get Members return empty array. Iteration Skip")
 		return
 	}
-	done := make(chan bool)
 
 	timeout := time.After(n.v.GetDuration("FULFILL_PUBLISH_CONDITION_TIMEOUT"))
 
 	for n.paths.getSize() < n.v.GetInt("TARGET_NUMBER_OF_CONNECTED_PATHS") {
+		done := make(chan bool)
 		go func() {
 			peerChoice := rand.Intn(clusterSize)
 			memberIP := resp.Member[peerChoice]
@@ -317,6 +317,7 @@ func (n *Node) getMorePaths() {
 				}
 			}
 			done <- true
+			defer close(done)
 		}()
 		select {
 		case <-done:
@@ -448,13 +449,11 @@ func (node *Node) sendCoverMessageWorker(ctx context.Context, connProfile *TCPCo
 	defer conn.Close()
 
 	encoder := connProfile.Encoder
-
-	doneSuccess := make(chan bool)
-	doneErr := make(chan error)
-	defer close(doneSuccess)
-	defer close(doneErr)
+	interval := node.v.GetDuration("COVER_MESSAGE_SENDING_INTERVAL")
 
 	for {
+		doneSuccess := make(chan bool)
+		doneErr := make(chan error)
 		go func() {
 			path, _ := node.paths.getValue(pathID)
 			coverMsg, err := NewCoverMessage(path.proxyPublic, path.symKey)
@@ -468,6 +467,8 @@ func (node *Node) sendCoverMessageWorker(ctx context.Context, connProfile *TCPCo
 			} else {
 				doneSuccess <- true
 			}
+			defer close(doneSuccess)
+			defer close(doneErr)
 		}()
 
 		// check if terminated
@@ -477,12 +478,13 @@ func (node *Node) sendCoverMessageWorker(ctx context.Context, connProfile *TCPCo
 			return
 		case <-doneSuccess:
 			// postpone tcp connection deadline
-			(*connProfile.Conn).SetDeadline(time.Now().Add(node.v.GetDuration("COVER_MESSAGE_SENDING_INTERVAL")).Add(time.Minute))
+			(*connProfile.Conn).SetDeadline(time.Now().Add(interval).Add(time.Minute))
 			logMsg(node.name, "sendCoverMessageWorker", fmt.Sprintf("cover message to %s on path %v is sent successfully.", conn.RemoteAddr().String(), pathID.String()))
-			time.Sleep(node.v.GetDuration("COVER_MESSAGE_SENDING_INTERVAL"))
 		case <-ctx.Done():
 			logMsg(node.name, "sendCoverMessageWorker", fmt.Sprintf("TERMINATED BY OTHERS %s", conn.RemoteAddr().String()))
+			return
 		}
+		time.Sleep(interval)
 	}
 }
 
@@ -497,10 +499,9 @@ func (node *Node) handleApplicationMessageWorker(ctx context.Context, conn net.C
 
 	decoder := gob.NewDecoder(conn)
 
-	doneSuccess := make(chan ApplicationMessage)
-	doneErr := make(chan error)
-
 	for {
+		doneSuccess := make(chan ApplicationMessage)
+		doneErr := make(chan error)
 		go func() {
 			msg := ApplicationMessage{}
 			err := decoder.Decode(&msg)
@@ -509,6 +510,9 @@ func (node *Node) handleApplicationMessageWorker(ctx context.Context, conn net.C
 			} else {
 				doneSuccess <- msg
 			}
+
+			defer close(doneSuccess)
+			defer close(doneErr)
 		}()
 
 		select {
