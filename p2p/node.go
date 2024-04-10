@@ -950,12 +950,17 @@ func (n *Node) handleCreateProxyReq(conn net.Conn, content *CreateProxyReq) erro
 		logMsg(n.name, "handleCreateProxyReq", "conn is nil, ignore the request")
 		return errors.New("tcp conn terminated at handleCreateProxyReq")
 	}
+	coverIp, _, err := net.SplitHostPort(conn.RemoteAddr().String())
+	if err != nil {
+		logMsg(n.name, "handleCreateProxyReq", "failed to split host port, ignore the request")
+		return errors.New("tcp conn failed to split host port")
+	}
+
 	// check number of cover nodes
-	_, alreadyMyCover := n.covers.getValue(conn.RemoteAddr().String())
+	_, alreadyMyCover := n.covers.getValue(coverIp)
 	shouldAcceptConnection := n.covers.getSize() < n.v.GetInt("MAXIMUM_NUMBER_OF_COVER_NODES") && !alreadyMyCover
 
 	var createProxyResponse CreateProxyResp
-	var coverProfileKey string
 
 	if shouldAcceptConnection {
 
@@ -976,8 +981,7 @@ func (n *Node) handleCreateProxyReq(conn net.Conn, content *CreateProxyReq) erro
 		})
 
 		// new cover node
-		coverProfileKey = conn.RemoteAddr().String()
-		n.covers.setValue(coverProfileKey, CoverNodeProfile{
+		n.covers.setValue(coverIp, CoverNodeProfile{
 			cover:     conn.RemoteAddr().String(),
 			secretKey: secretKey,
 			treeUUID:  newPathID,
@@ -1006,7 +1010,7 @@ func (n *Node) handleCreateProxyReq(conn net.Conn, content *CreateProxyReq) erro
 		}
 	}
 
-	err := gob.NewEncoder(conn).Encode(createProxyResponse)
+	err = gob.NewEncoder(conn).Encode(createProxyResponse)
 	if err != nil {
 		logProtocolMessageHandlerError(n.name, "handleCreateProxyReq", conn, err, content)
 		defer conn.Close()
@@ -1015,7 +1019,7 @@ func (n *Node) handleCreateProxyReq(conn net.Conn, content *CreateProxyReq) erro
 	if shouldAcceptConnection {
 		// conn will be closed by handleApplicationMessageWorker
 		// If everything works, start a worker handling all incoming Application Messages(Real and Cover) from this cover node.
-		go n.handleApplicationMessageWorker(conn, coverProfileKey)
+		go n.handleApplicationMessageWorker(conn, coverIp)
 	} else {
 		defer conn.Close()
 	}
