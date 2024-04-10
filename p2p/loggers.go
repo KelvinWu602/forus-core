@@ -22,6 +22,7 @@ func msg(nodeName string, triggerPoint string, msg string) string {
 			callee: %v
 				%v
 		`,
+		nodeName,
 		getCallerName(),
 		triggerPoint,
 		msg,

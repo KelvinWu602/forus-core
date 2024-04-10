@@ -3,6 +3,7 @@ package p2p
 import (
 	"context"
 	"encoding/gob"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -202,7 +203,7 @@ func (node *Node) maintainPathsHealthWorker() {
 			go func(report InvalidPathProfile) {
 				switch report.HandleType {
 				case CLEAN:
-					node.paths.deleteValue(report.SelfProfile.uuid)
+					report.SelfProfile.cancelFunc(errors.New("invalid path was cleaned"))
 				case FIX:
 					report.SelfProfile.next2 = report.NextHopProfile.NextHop
 					report.SelfProfile.proxyPublic = report.NextHopProfile.ProxyPublicKey
@@ -237,7 +238,6 @@ func (node *Node) sendCoverMessageWorker(ctx context.Context, connProfile *TCPCo
 	defer node.paths.deleteValue(pathID)
 	if connProfile == nil || connProfile.Conn == nil || connProfile.Encoder == nil {
 		logMsg(node.name, "sendCoverMessageWorker", fmt.Sprintf("sendCoverMessageWorker on path %v failed to start due to connProfile = nil.", pathID.String()))
-		node.paths.deleteValue(pathID)
 		return
 	}
 	conn := *connProfile.Conn
@@ -271,7 +271,6 @@ func (node *Node) sendCoverMessageWorker(ctx context.Context, connProfile *TCPCo
 		select {
 		case err := <-doneErr:
 			logError(node.name, "sendCoverMessageWorker", err, fmt.Sprintf("error when sending cover message to %s", conn.RemoteAddr().String()))
-			node.paths.deleteValue(pathID)
 			return
 		case <-doneSuccess:
 			// postpone tcp connection deadline

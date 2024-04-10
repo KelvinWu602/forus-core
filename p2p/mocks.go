@@ -44,10 +44,7 @@ func (nd *MockND) JoinCluster(contact string) error {
 	}
 
 	mygroup = append(mygroup, contact)
-
-	for _, newgroupmembers := range toJoin {
-		mygroup = append(mygroup, newgroupmembers)
-	}
+	mygroup = append(mygroup, toJoin...)
 
 	toJoin = append(toJoin, nd.ownerAddr)
 
