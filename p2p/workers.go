@@ -281,7 +281,7 @@ func (node *Node) sendCoverMessageWorker(connProfile *TCPConnectionProfile, path
 	}
 }
 
-func (node *Node) handleApplicationMessageWorker(conn net.Conn, coverIp string) {
+func (node *Node) handleApplicationMessageWorker(ctx context.Context, conn net.Conn, coverIp string) {
 	defer node.covers.deleteValue(coverIp)
 	if conn == nil {
 		logMsg(node.name, "handleApplicationMessageWorker", fmt.Sprintf("handleApplicationMessageWorker failed to start due to conn = nil, CoverIP = %v.", coverIp))
@@ -330,6 +330,9 @@ func (node *Node) handleApplicationMessageWorker(conn net.Conn, coverIp string) 
 			return
 		case <-time.After(node.v.GetDuration("APPLICATION_MESSAGE_RECEIVING_INTERVAL")):
 			logMsg(node.name, "handleApplicationMessageWorker", fmt.Sprintf("handleApplicationMessageWorker from %s: COVER MESSAGE TIMEOUT.\n", conn.RemoteAddr().String()))
+			return
+		case <-ctx.Done():
+			logMsg(node.name, "handleApplicationMessageWorker", fmt.Sprintf("handleApplicationMessageWorker from %s: TERMINATED BY OTHERS.\n", conn.RemoteAddr().String()))
 			return
 		}
 	}

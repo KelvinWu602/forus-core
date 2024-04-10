@@ -2,6 +2,7 @@ package p2p
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/gob"
 	"errors"
@@ -619,12 +620,7 @@ func (n *Node) MoveUp(pathID uuid.UUID) {
 			failureCount: 0,
 		}
 		// delete cover nodes that are connected to the old blacklist path
-		n.covers.iterate(func(coverIP string, coverProfile CoverNodeProfile) {
-			if coverProfile.treeUUID == pathID {
-				delete(n.covers.data, coverIP)
-			}
-		}, false)
-		n.paths.deleteValue(pathID)
+		n.deletePathAndRelatedCovers(pathID)
 		n.paths.setValue(newPathProfile.uuid, newPathProfile)
 	}
 
@@ -637,12 +633,13 @@ func (n *Node) deletePathAndRelatedCovers(pathID uuid.UUID) {
 	if !found {
 		return
 	}
-	n.paths.deleteValue(pathID)
 	n.covers.iterate(func(coverIP string, coverProfile CoverNodeProfile) {
 		if coverProfile.treeUUID == pathID {
-			delete(n.covers.data, coverIP)
+			// this will terminate the corresponding handle application msg worker, which will in turn clean the cover profile
+			n.covers.data[coverIP].cancelFunc()
 		}
 	}, false)
+	n.paths.deleteValue(pathID)
 }
 
 // Tree Formation Process by aggregating QueryPath, CreateProxy, ConnectPath & joining cluster
@@ -895,6 +892,8 @@ func (n *Node) handleConnectPathReq(conn net.Conn, content *ConnectPathReq) erro
 	shouldAcceptConnection := n.covers.getSize() < n.v.GetInt("MAXIMUM_NUMBER_OF_COVER_NODES") && !alreadyMyCover
 
 	var connectPathResponse ConnectPathResp
+	var ctx context.Context
+	var cancel context.CancelFunc
 
 	if shouldAcceptConnection {
 		requestedPath, err := DecryptUUID(content.EncryptedTreeUUID, n.privateKey)
@@ -913,10 +912,12 @@ func (n *Node) handleConnectPathReq(conn net.Conn, content *ConnectPathReq) erro
 		secretKey := requesterKeyExchangeInfo.GetSymKey(*myKeyExchangeSecret)
 
 		// add incoming node as a cover node
+		ctx, cancel = context.WithCancel(context.Background())
 		n.covers.setValue(coverIp, CoverNodeProfile{
-			cover:     coverIp,
-			secretKey: secretKey,
-			treeUUID:  requestedPath,
+			cover:      coverIp,
+			secretKey:  secretKey,
+			treeUUID:   requestedPath,
+			cancelFunc: cancel,
 		})
 
 		connectPathResponse = ConnectPathResp{
@@ -938,7 +939,7 @@ func (n *Node) handleConnectPathReq(conn net.Conn, content *ConnectPathReq) erro
 	if shouldAcceptConnection {
 		// conn will be closed by handleApplicationMessageWorker
 		// If everything works, start a worker handling all incoming Application Messages(Real and Cover) from this cover node.
-		go n.handleApplicationMessageWorker(conn, coverIp)
+		go n.handleApplicationMessageWorker(ctx, conn, coverIp)
 	} else {
 		defer conn.Close()
 	}
@@ -961,6 +962,8 @@ func (n *Node) handleCreateProxyReq(conn net.Conn, content *CreateProxyReq) erro
 	shouldAcceptConnection := n.covers.getSize() < n.v.GetInt("MAXIMUM_NUMBER_OF_COVER_NODES") && !alreadyMyCover
 
 	var createProxyResponse CreateProxyResp
+	var ctx context.Context
+	var cancel context.CancelFunc
 
 	if shouldAcceptConnection {
 
@@ -981,10 +984,12 @@ func (n *Node) handleCreateProxyReq(conn net.Conn, content *CreateProxyReq) erro
 		})
 
 		// new cover node
+		ctx, cancel = context.WithCancel(context.Background())
 		n.covers.setValue(coverIp, CoverNodeProfile{
-			cover:     conn.RemoteAddr().String(),
-			secretKey: secretKey,
-			treeUUID:  newPathID,
+			cover:      conn.RemoteAddr().String(),
+			secretKey:  secretKey,
+			treeUUID:   newPathID,
+			cancelFunc: cancel,
 		})
 
 		// send a create proxy response back
@@ -1019,7 +1024,7 @@ func (n *Node) handleCreateProxyReq(conn net.Conn, content *CreateProxyReq) erro
 	if shouldAcceptConnection {
 		// conn will be closed by handleApplicationMessageWorker
 		// If everything works, start a worker handling all incoming Application Messages(Real and Cover) from this cover node.
-		go n.handleApplicationMessageWorker(conn, coverIp)
+		go n.handleApplicationMessageWorker(ctx, conn, coverIp)
 	} else {
 		defer conn.Close()
 	}
