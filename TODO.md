@@ -93,3 +93,39 @@ but the cover node can only be identified by sending port != listening port anyw
 unless can fix the sending port, making it must be listening port +1
 
 then change verify condition logic to use breakhostport(content.nextHop).port+1 to reconstruct xxxxx
+
+
+
+=====
+path delete should trigger stop of send cover msg worker
+
+paths creation:
+- connect path
+- create proxy
+- handle create proxy
+- move up
+- post path handler
+
+paths modification:
+- mark publish job done
+- fix invalid path
+
+paths delete
+- moveup
+- clean invalid path
+- send cover msg
+===================
+
+paths creation:
+- connect path
+- create proxy
+- handle create proxy
+- move up
+- post path handler
+
+paths modification:
+- mark publish job done
+- fix invalid path
+
+paths delete
+- terminate send cover msg worker

@@ -233,7 +233,8 @@ func (node *Node) checkPublishConditionWorker() {
 
 }
 
-func (node *Node) sendCoverMessageWorker(connProfile *TCPConnectionProfile, pathID uuid.UUID) {
+func (node *Node) sendCoverMessageWorker(ctx context.Context, connProfile *TCPConnectionProfile, pathID uuid.UUID) {
+	defer node.paths.deleteValue(pathID)
 	if connProfile == nil || connProfile.Conn == nil || connProfile.Encoder == nil {
 		logMsg(node.name, "sendCoverMessageWorker", fmt.Sprintf("sendCoverMessageWorker on path %v failed to start due to connProfile = nil.", pathID.String()))
 		node.paths.deleteValue(pathID)
@@ -277,6 +278,8 @@ func (node *Node) sendCoverMessageWorker(connProfile *TCPConnectionProfile, path
 			(*connProfile.Conn).SetDeadline(time.Now().Add(node.v.GetDuration("COVER_MESSAGE_SENDING_INTERVAL")).Add(time.Minute))
 			logMsg(node.name, "sendCoverMessageWorker", fmt.Sprintf("cover message to %s on path %v is sent successfully.", conn.RemoteAddr().String(), pathID.String()))
 			time.Sleep(node.v.GetDuration("COVER_MESSAGE_SENDING_INTERVAL"))
+		case <-ctx.Done():
+			logMsg(node.name, "sendCoverMessageWorker", fmt.Sprintf("TERMINATED BY OTHERS %s", conn.RemoteAddr().String()))
 		}
 	}
 }

@@ -17,6 +17,7 @@ type PathProfile struct {
 	symKey       big.Int
 	successCount int
 	failureCount int
+	cancelFunc   context.CancelCauseFunc //for terminating the handleApplicationMessageWorker dedicated to a cover node
 }
 
 // contains communication info for all cover nodes of the particular node.
@@ -24,5 +25,5 @@ type CoverNodeProfile struct {
 	cover      string // IP address of the cover node
 	secretKey  big.Int
 	treeUUID   uuid.UUID
-	cancelFunc context.CancelFunc //for terminating the handleApplicationMessageWorker dedicated to a cover node
+	cancelFunc context.CancelCauseFunc //for terminating the handleApplicationMessageWorker dedicated to a cover node
 }

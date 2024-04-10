@@ -511,6 +511,7 @@ func (n *Node) ConnectPath(ip string, treeID uuid.UUID) (*ConnectPathResp, error
 		n.halfOpenPath.deleteValue(treeID)
 
 		// create new path profile
+		ctx, cancel := context.WithCancelCause(context.Background())
 		n.paths.setValue(treeID, PathProfile{
 			uuid:         halfOpenPathProfile.uuid,
 			next:         halfOpenPathProfile.next,
@@ -519,10 +520,11 @@ func (n *Node) ConnectPath(ip string, treeID uuid.UUID) (*ConnectPathResp, error
 			symKey:       resp.KeyExchange.GetSymKey(*myKeyExchangeSecret),
 			successCount: 0,
 			failureCount: 0,
+			cancelFunc:   cancel,
 		})
 
 		// Start the sendCoverMessageWorker
-		go n.sendCoverMessageWorker(connProfile, treeID)
+		go n.sendCoverMessageWorker(ctx, connProfile, treeID)
 		// Store a pointer to the opened tcp connection for later publish jobs
 		n.openConnections.setValue(treeID, connProfile)
 	}
@@ -553,6 +555,7 @@ func (n *Node) CreateProxy(ip string) (*CreateProxyResp, error) {
 			return nil, errors.New("malformed encryptedTreeUUID")
 		}
 		// create new path profile
+		ctx, cancel := context.WithCancelCause(context.Background())
 		n.paths.setValue(treeID, PathProfile{
 			uuid:         treeID,
 			next:         ip,
@@ -561,10 +564,11 @@ func (n *Node) CreateProxy(ip string) (*CreateProxyResp, error) {
 			symKey:       resp.KeyExchange.GetSymKey(*myKeyExchangeSecret),
 			successCount: 0,
 			failureCount: 0,
+			cancelFunc:   cancel,
 		})
 
 		// Start the sendCoverMessageWorker
-		go n.sendCoverMessageWorker(connProfile, treeID)
+		go n.sendCoverMessageWorker(ctx, connProfile, treeID)
 		n.openConnections.setValue(treeID, connProfile)
 	}
 
@@ -629,17 +633,17 @@ func (n *Node) MoveUp(pathID uuid.UUID) {
 
 // MoveUp helper: move cover nodes
 func (n *Node) deletePathAndRelatedCovers(pathID uuid.UUID) {
-	_, found := n.paths.getValue(pathID)
+	path, found := n.paths.getValue(pathID)
 	if !found {
 		return
 	}
 	n.covers.iterate(func(coverIP string, coverProfile CoverNodeProfile) {
 		if coverProfile.treeUUID == pathID {
 			// this will terminate the corresponding handle application msg worker, which will in turn clean the cover profile
-			n.covers.data[coverIP].cancelFunc()
+			n.covers.data[coverIP].cancelFunc(errors.New("deleted during move up"))
 		}
 	}, false)
-	n.paths.deleteValue(pathID)
+	path.cancelFunc(errors.New("deleted during move up"))
 }
 
 // Tree Formation Process by aggregating QueryPath, CreateProxy, ConnectPath & joining cluster
@@ -893,7 +897,7 @@ func (n *Node) handleConnectPathReq(conn net.Conn, content *ConnectPathReq) erro
 
 	var connectPathResponse ConnectPathResp
 	var ctx context.Context
-	var cancel context.CancelFunc
+	var cancel context.CancelCauseFunc
 
 	if shouldAcceptConnection {
 		requestedPath, err := DecryptUUID(content.EncryptedTreeUUID, n.privateKey)
@@ -912,7 +916,7 @@ func (n *Node) handleConnectPathReq(conn net.Conn, content *ConnectPathReq) erro
 		secretKey := requesterKeyExchangeInfo.GetSymKey(*myKeyExchangeSecret)
 
 		// add incoming node as a cover node
-		ctx, cancel = context.WithCancel(context.Background())
+		ctx, cancel = context.WithCancelCause(context.Background())
 		n.covers.setValue(coverIp, CoverNodeProfile{
 			cover:      coverIp,
 			secretKey:  secretKey,
@@ -963,7 +967,7 @@ func (n *Node) handleCreateProxyReq(conn net.Conn, content *CreateProxyReq) erro
 
 	var createProxyResponse CreateProxyResp
 	var ctx context.Context
-	var cancel context.CancelFunc
+	var cancel context.CancelCauseFunc
 
 	if shouldAcceptConnection {
 
@@ -984,7 +988,7 @@ func (n *Node) handleCreateProxyReq(conn net.Conn, content *CreateProxyReq) erro
 		})
 
 		// new cover node
-		ctx, cancel = context.WithCancel(context.Background())
+		ctx, cancel = context.WithCancelCause(context.Background())
 		n.covers.setValue(coverIp, CoverNodeProfile{
 			cover:      conn.RemoteAddr().String(),
 			secretKey:  secretKey,
