@@ -4,11 +4,11 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/gob"
+	"errors"
 	"fmt"
 	"math/big"
 )
 
-// TODO: use the correct type in input
 func NewCoverMessage(proxyPublicKey []byte, symmetricKey big.Int) (*ApplicationMessage, error) {
 	key := [48]byte{}
 	rand.Read(key[:])
@@ -99,18 +99,20 @@ func (msg *DataMessage) CreateAsymmetricEncryptionInput() (*AsymetricEncryptData
 }
 
 func (msg *AsymetricEncryptDataMessage) ToBytes() ([]byte, error) {
-	buffer := bytes.Buffer{}
-	encoder := gob.NewEncoder(&buffer)
-	if err := encoder.Encode(msg); err != nil {
-		return nil, err
-	}
-	return buffer.Bytes(), nil
+	return gobEncodeToBytes(msg)
 }
 
 func (msg *SymmetricEncryptDataMessage) ToBytes() ([]byte, error) {
-	buffer := bytes.Buffer{}
-	encoder := gob.NewEncoder(&buffer)
-	if err := encoder.Encode(msg); err != nil {
+	return gobEncodeToBytes(msg)
+}
+
+var errGobEncodeMsg = errors.New("failed to encode message using gob")
+
+func gobEncodeToBytes[T any](req T) ([]byte, error) {
+	buffer := bytes.NewBuffer([]byte{})
+	err := gob.NewEncoder(buffer).Encode(req)
+	if err != nil {
+		logError2("gobEncodeToBytes", err, fmt.Sprintf("input = %v\n", req))
 		return nil, err
 	}
 	return buffer.Bytes(), nil

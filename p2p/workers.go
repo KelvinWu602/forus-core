@@ -1,10 +1,12 @@
 package p2p
 
 import (
+	"bytes"
 	"context"
 	"encoding/gob"
 	"errors"
 	"fmt"
+	"math/rand"
 	"net"
 	"sync"
 	"time"
@@ -129,6 +131,203 @@ func (node *Node) canPublish(lock bool) bool {
 	}
 	return len(node.covers.data) >= node.v.GetInt("NUMBER_OF_COVER_NODES_FOR_PUBLISH") &&
 		len(node.paths.data) > 0
+}
+
+func (n *Node) handleApplicationMessage(rawMessage ApplicationMessage, coverProfile CoverNodeProfile, forwardPathProfile PathProfile) error {
+	// 1. Symmetric Decrypt.
+	coverIp := coverProfile.cover
+	symmetricKey := coverProfile.secretKey
+	symOutput := rawMessage.SymmetricEncryptedPayload
+	symInputBytes, err := SymmetricDecrypt(symOutput, symmetricKey)
+	if err != nil {
+		logError(n.name, "handleApplicationMessage", err, fmt.Sprintf("symmetric decrypt failed, from cover = %v", coverIp))
+		return err
+	}
+	// 2. Decode Symmetric Input Bytes
+	symInput := SymmetricEncryptDataMessage{}
+	if err := gob.NewDecoder(bytes.NewBuffer(symInputBytes)).Decode(&symInput); err != nil {
+		logError(n.name, "handleApplicationMessage", err, fmt.Sprintf("symmetric decrypt failed, from cover = %v", coverIp))
+		return err
+	}
+	// 3. Check Type
+	switch symInput.Type {
+	case Cover:
+		// simply discarded. The timeout is cancelled when this node received an ApplicationMessage, regardless of Cover or Real.
+		return nil
+	case Real:
+		logMsg(n.name, "handleApplicationMessage", fmt.Sprintf("Real Message Received, from cover = %v", coverIp))
+		return n.handleRealMessage(symInput.AsymetricEncryptedPayload, coverProfile, forwardPathProfile)
+	default:
+		logError(n.name, "handleApplicationMessage", err, fmt.Sprintf("invalid message type, from cover = %v", coverIp))
+		return errors.New("invalid data message type")
+	}
+}
+
+func (n *Node) handleRealMessage(asymOutput []byte, coverProfile CoverNodeProfile, forwardPathProfile PathProfile) error {
+	priKey := n.privateKey
+	asymInputBytes, err := AsymmetricDecrypt(asymOutput, priKey)
+	// Check if self is the proxy
+	if err != nil && !errors.Is(err, errWrongPrivateKey) {
+		// Failed to decrypt, unknown reason
+		logError(n.name, "handleRealMessage", err, fmt.Sprintf("asymmetric decrypt failed, asymOutput = %v", asymOutput))
+		return err
+	}
+
+	isProxy := err == nil
+	coverIp := coverProfile.cover
+	forwardPathId := forwardPathProfile.uuid
+	if isProxy && forwardPathProfile.next != "ImmutableStorage" {
+		// if the real message is asymmetrically encrypted with my private key, but routing info says this message should be routed elsewhere, ignore
+		logMsg(n.name, "handleRealMessage", fmt.Sprintf("IGNORED valid real msg from cover %v connected to %v, next-hop = %v but AsymDecrypt OK", coverIp, forwardPathId, forwardPathProfile.next))
+		return errors.New("can asym decrypt but next hop is not IS")
+	}
+
+	if isProxy {
+		asymInput := AsymetricEncryptDataMessage{}
+		err = gob.NewDecoder(bytes.NewBuffer(asymInputBytes)).Decode(&asymInput)
+		if err != nil {
+			logError(n.name, "handleRealMessage", err, fmt.Sprintf("asymmetric decode failed, asymInputBytes = %v", asymInputBytes))
+			return err
+		}
+		// Store in ImmutableStorage
+		key := asymInput.Data.Key
+		content := asymInput.Data.Content
+		resp, err := n.isClient.Store(key, content)
+		if err != nil {
+			logError(n.name, "handleRealMessage", err, fmt.Sprintf("store real message failed, key = %v, content = %v", key, content))
+			return err
+		}
+		logMsg(n.name, "handleRealMessage", fmt.Sprintf("Store Real Message Success: Status = %v]:Key = %v", resp.Success, key))
+	} else {
+		// Call Forward
+		err := n.Forward(asymOutput, coverProfile, forwardPathProfile)
+		if err != nil {
+			logError(n.name, "handleRealMessage", err, fmt.Sprintf("Forward failed on paths = %v, asymOutput = %v", forwardPathId, asymOutput))
+			return err
+		}
+		logMsg(n.name, "handleRealMessage", fmt.Sprintf("Forward Real Message Success: from %v to %v", coverIp, forwardPathId))
+	}
+	return nil
+}
+
+// move up one step
+func (n *Node) MoveUp(pathID uuid.UUID) {
+
+	logMsg(n.name, "MoveUp", fmt.Sprintf("Starts, Path: %v", pathID.String()))
+
+	value, ok := n.paths.getValue(pathID)
+	if ok {
+		originalNext := value.next
+		originalNextNext := value.next2
+		// 1) check what originalNextNext is
+		if originalNextNext == "ImmutableStorage" {
+			// next-next-hop is ImmutableStorage --> next-hop is proxy --> cannot move up, delete this blacklist path
+			n.deletePathAndRelatedCovers(pathID)
+			logMsg(n.name, "MoveUp", fmt.Sprintf("Ends, Path: %v:  Case: Next-Next is ImmutableStorage, path is removed", pathID.String()))
+			return
+		}
+		// 2) send verifyCover(originalNext) to originNextNext
+		resp, err := n.sendVerifyCoverRequest(originalNextNext, originalNext)
+		if err != nil {
+			// next-next-hop is unreachable --> cannot move up, delete this blacklist path
+			n.deletePathAndRelatedCovers(pathID)
+			logError(n.name, "MoveUp", err, fmt.Sprintf("Ends, Path: %v:  Case: error during verifyCover, path is removed", pathID.String()))
+			return
+		}
+		if resp.IsVerified {
+			// connectPath with originalNextNext, it will overwrite the current blacklist path
+			resp, err := n.ConnectPath(originalNextNext, pathID)
+			if err == nil && resp.Accepted {
+				// if success, done
+				logMsg(n.name, "MoveUp", fmt.Sprintf("Ends, Path: %v:  Case: Successfully connected to next next hop", pathID.String()))
+				return
+			}
+		}
+
+		// 3) if resp is not verified OR connectPath failed
+		// self becomes proxy
+		newPathProfile := PathProfile{
+			uuid:         uuid.New(),
+			next:         "ImmutableStorage",
+			next2:        "",
+			proxyPublic:  n.publicKey,
+			successCount: 0,
+			failureCount: 0,
+		}
+		// delete cover nodes that are connected to the old blacklist path
+		n.deletePathAndRelatedCovers(pathID)
+		n.paths.setValue(newPathProfile.uuid, newPathProfile)
+	}
+
+	logMsg(n.name, "MoveUp", fmt.Sprintf("Ends, Path: %v:  Case: Self becomes proxy success", pathID.String()))
+}
+
+// MoveUp helper: move cover nodes
+func (n *Node) deletePathAndRelatedCovers(pathID uuid.UUID) {
+	path, found := n.paths.getValue(pathID)
+	if !found {
+		return
+	}
+	n.covers.iterate(func(coverIP string, coverProfile CoverNodeProfile) {
+		if coverProfile.treeUUID == pathID {
+			// this will terminate the corresponding handle application msg worker, which will in turn clean the cover profile
+			n.covers.data[coverIP].cancelFunc(errors.New("deleted during move up"))
+		}
+	}, false)
+	path.cancelFunc(errors.New("deleted during move up"))
+}
+
+// Tree Formation Process by aggregating QueryPath, CreateProxy, ConnectPath & joining cluster
+func (n *Node) getMorePaths() {
+
+	logMsg(n.name, "fulfillPublishCondition", "Started")
+
+	// Get all cluster members IP
+	resp, err := n.ndClient.GetMembers()
+	if err != nil {
+		logError(n.name, "fulfillPublishCondition", err, "Get Member Error. Iteration Skip")
+		return
+	}
+	clusterSize := len(resp.Member)
+	if clusterSize <= 0 {
+		logMsg(n.name, "fulfillPublishCondition", "Get Members return empty array. Iteration Skip")
+		return
+	}
+	done := make(chan bool)
+
+	timeout := time.After(n.v.GetDuration("FULFILL_PUBLISH_CONDITION_TIMEOUT"))
+
+	for n.paths.getSize() < n.v.GetInt("TARGET_NUMBER_OF_CONNECTED_PATHS") {
+		go func() {
+			peerChoice := rand.Intn(clusterSize)
+			memberIP := resp.Member[peerChoice]
+			logMsg(n.name, "fulfillPublishCondition", fmt.Sprintf("Connect %v", memberIP))
+			_, pendingPaths, _ := n.QueryPath(memberIP)
+			if len(pendingPaths) > 0 {
+				// if the peer offers some path, connect to it
+				// will not connect to all path under the same node to diverse risk
+				pathChoice := rand.Intn(len(pendingPaths))
+				if _, err := n.ConnectPath(memberIP, pendingPaths[pathChoice].uuid); err != nil {
+					logError(n.name, "fulfillPublishCondition", err, fmt.Sprintf("ConnectPath Error: Connect %v", memberIP))
+				}
+			} else {
+				// if the peer does not have path, ask it to become a proxy
+				if _, err := n.CreateProxy(memberIP); err != nil {
+					logError(n.name, "fulfillPublishCondition", err, fmt.Sprintf("CreateProxy Error: Connect %v", memberIP))
+				}
+			}
+			done <- true
+		}()
+		select {
+		case <-done:
+			time.Sleep(n.v.GetDuration("FULFILL_PUBLISH_CONDITION_INTERVAL"))
+			continue
+		case <-timeout:
+			logMsg(n.name, "fulfillPublishCondition", "Iteration Timeout")
+			return
+		}
+	}
+	logMsg(n.name, "fulfillPublishCondition", "Iteration Success")
 }
 
 // workers
