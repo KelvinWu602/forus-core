@@ -9,6 +9,10 @@ type HTTPPostMessageReq struct {
 	PathID  uuid.UUID `json:"path_id,omitempty"`
 }
 
+type HTTPPostMessageResp struct {
+	PublishJobId uuid.UUID `json:"publish_job_id,omitempty"`
+}
+
 type HTTPPostPathReq struct {
 	IP     string    `json:"ip,omitempty"`
 	PathID uuid.UUID `json:"path_id,omitempty"`
