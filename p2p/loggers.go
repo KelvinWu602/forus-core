@@ -8,7 +8,7 @@ import (
 )
 
 func getCallerName() string {
-	pc, _, _, ok := runtime.Caller(3)
+	pc, _, _, ok := runtime.Caller(4)
 	details := runtime.FuncForPC(pc)
 	if ok && details != nil {
 		return details.Name()

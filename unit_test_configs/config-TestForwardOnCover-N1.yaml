@@ -37,3 +37,4 @@ NODE_DISCOVERY_SERVER_LISTEN_PORT: ":3200"
 # TCP Server by default should bind to all IP 
 # Defining TESTING_TCP_SERVER_LISTEN_IP may cause it to be undiscoverable by other nodes on the internet
 TESTING_TCP_SERVER_LISTEN_IP: "127.0.0.1"
+NODE_ALIAS: N1

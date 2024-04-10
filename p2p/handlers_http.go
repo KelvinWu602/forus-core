@@ -203,7 +203,7 @@ func (n *Node) handlePostPath(c *gin.Context) {
 		return
 	}
 	// response
-	c.IndentedJSON(http.StatusOK, HTTPSchemaPath{
+	c.IndentedJSON(http.StatusCreated, HTTPSchemaPath{
 		Id:                 path.uuid,
 		Next:               path.next,
 		Next2:              path.next2,

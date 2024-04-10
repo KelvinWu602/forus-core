@@ -66,11 +66,11 @@ func TestConfigs(t *testing.T) {
 	mockND := NewMockND("127.0.0.1", members, &sync.RWMutex{})
 	mockIS := NewMockIS()
 	go func() {
-		initMockND(mockND, "3200")
+		initMockND(mockND, "127.0.0.1:3200")
 		setup.Done()
 	}()
 	go func() {
-		initMockIS(mockIS, "3100")
+		initMockIS(mockIS, "127.0.0.1:3100")
 		setup.Done()
 	}()
 	go func() {
@@ -81,7 +81,7 @@ func TestConfigs(t *testing.T) {
 
 	// http calls
 	// get configs
-	res, resBody := sendGetRequest("http://localhost:3000/configs")
+	res, resBody := sendGetRequest("http://127.0.0.1:3000/configs")
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
 		t.Fatal(res.StatusCode, res.Status, resBody, "get configs wrong status code")
@@ -96,15 +96,15 @@ func TestMockND(t *testing.T) {
 	// All component prefixed with 1 ==> Mock
 	// All component prefixed with 2 ==> Normal
 	members := map[string][]string{}
-	members["127.0.0.1:3001"] = []string{}
-	members["127.0.0.1:4001"] = []string{}
+	members["127.0.0.1"] = []string{}
+	members["127.0.0.2"] = []string{}
 	NDlock := sync.RWMutex{}
-	mockND1 := NewMockND("127.0.0.1:4001", members, &NDlock)
-	mockND2 := NewMockND("127.0.0.1:3001", members, &NDlock)
+	mockND1 := NewMockND("127.0.0.1", members, &NDlock)
+	mockND2 := NewMockND("127.0.0.2", members, &NDlock)
 
 	go func() {
-		initMockND(mockND1, "3201")
-		initMockND(mockND2, "3200")
+		initMockND(mockND1, "127.0.0.1:3200")
+		initMockND(mockND2, "127.0.0.2:3200")
 		setup.Done()
 	}()
 	setup.Wait()
@@ -112,7 +112,9 @@ func TestMockND(t *testing.T) {
 	v1 := viper.New()
 	v2 := viper.New()
 
-	v1.SetDefault("NODE_DISCOVERY_SERVER_LISTEN_PORT", ":3201")
+	v1.SetDefault("NODE_DISCOVERY_SERVER_LISTEN_IP", "127.0.0.1")
+	v1.SetDefault("NODE_DISCOVERY_SERVER_LISTEN_PORT", ":3200")
+	v2.SetDefault("NODE_DISCOVERY_SERVER_LISTEN_IP", "127.0.0.2")
 	v2.SetDefault("NODE_DISCOVERY_SERVER_LISTEN_PORT", ":3200")
 	ndclient1 := initNodeDiscoverClient(v1)
 	ndclient2 := initNodeDiscoverClient(v2)
@@ -125,15 +127,15 @@ func TestMockND(t *testing.T) {
 	assert.Equal([]string(nil), resp2.Member, "should be nil")
 
 	// ND1 joinCluster
-	_, err1 = ndclient1.JoinCluster("127.0.0.1:3001")
+	_, err1 = ndclient1.JoinCluster("127.0.0.2")
 	assert.Equal(nil, err1, "should be nil")
 
 	resp1, err1 = ndclient1.GetMembers()
 	resp2, err2 = ndclient2.GetMembers()
 	assert.Equal(nil, err1, "should be nil")
 	assert.Equal(nil, err2, "should be nil")
-	assert.Equal([]string{"127.0.0.1:3001"}, resp1.Member, "should be nil")
-	assert.Equal([]string{"127.0.0.1:4001"}, resp2.Member, "should be nil")
+	assert.Equal([]string{"127.0.0.2"}, resp1.Member, "should be nil")
+	assert.Equal([]string{"127.0.0.1"}, resp2.Member, "should be nil")
 
 	// ND1 LeaveCluster
 	_, err1 = ndclient1.LeaveCluster()
@@ -161,11 +163,11 @@ func TestPublishOnProxy(t *testing.T) {
 	mockND := NewMockND("127.0.0.1", members, &sync.RWMutex{})
 	mockIS := NewMockIS()
 	go func() {
-		initMockND(mockND, "3200")
+		initMockND(mockND, "127.0.0.1:3200")
 		setup.Done()
 	}()
 	go func() {
-		initMockIS(mockIS, "3100")
+		initMockIS(mockIS, "127.0.0.1:3100")
 		setup.Done()
 	}()
 	go func() {
@@ -179,7 +181,7 @@ func TestPublishOnProxy(t *testing.T) {
 	// post path
 	postpathres, resBody := sendPostRequest("http://localhost:3000/path", `{}`)
 	defer postpathres.Body.Close()
-	if postpathres.StatusCode != http.StatusOK {
+	if postpathres.StatusCode != http.StatusCreated {
 		t.Fatal(postpathres.StatusCode, postpathres.Status, resBody, "post path wrong status code")
 	}
 	t.Log(resBody)
@@ -252,7 +254,7 @@ func TestPublishOnCover(t *testing.T) {
 	assert.Equal(0, proxy.paths.getSize(), "proxy should have 0 paths at the beginning")
 	postpathres, resBody := sendPostRequest("http://127.0.0.1:3000/path", `{}`)
 	defer postpathres.Body.Close()
-	if postpathres.StatusCode != http.StatusOK {
+	if postpathres.StatusCode != http.StatusCreated {
 		t.Fatal(postpathres.StatusCode, postpathres.Status, resBody, "post path on proxy wrong status code")
 	}
 	t.Log(resBody)
@@ -269,7 +271,7 @@ func TestPublishOnCover(t *testing.T) {
 	t.Log("post path on cover body", body)
 	postpathres2, resBody := sendPostRequest("http://127.0.0.2:3000/path", body)
 	defer postpathres2.Body.Close()
-	if postpathres.StatusCode != http.StatusOK {
+	if postpathres.StatusCode != http.StatusCreated {
 		t.Fatal(postpathres.StatusCode, postpathres.Status, resBody, "post path on cover wrong status code")
 	}
 	t.Log(resBody)
@@ -371,7 +373,7 @@ func TestForwardOnCover(t *testing.T) {
 	assert.Equal(0, N1.paths.getSize(), "N1 should have 0 paths at the beginning")
 	postpathres, resBody := sendPostRequest("http://127.0.0.1:3000/path", `{}`)
 	defer postpathres.Body.Close()
-	if postpathres.StatusCode != http.StatusOK {
+	if postpathres.StatusCode != http.StatusCreated {
 		t.Fatal(postpathres.StatusCode, postpathres.Status, resBody, "N1:POST /path: wrong status code")
 	}
 	t.Log(resBody)
@@ -384,11 +386,11 @@ func TestForwardOnCover(t *testing.T) {
 
 	// post path on N2
 	assert.Equal(0, N2.paths.getSize(), "N2 should have 0 paths at the beginning")
-	body := fmt.Sprintf(`{"ip":"127.0.0.2","path_id":"%v"}`, newPathID.String())
+	body := fmt.Sprintf(`{"ip":"127.0.0.1","path_id":"%v"}`, newPathID.String())
 	t.Log("post path on N2 body", body)
 	postpathres2, resBody := sendPostRequest("http://127.0.0.2:3000/path", body)
 	defer postpathres2.Body.Close()
-	if postpathres2.StatusCode != http.StatusOK {
+	if postpathres2.StatusCode != http.StatusCreated {
 		t.Fatal(postpathres2.StatusCode, postpathres2.Status, resBody, "N2:POST /path: wrong status code")
 	}
 	t.Log(resBody)
@@ -403,11 +405,11 @@ func TestForwardOnCover(t *testing.T) {
 
 	// post path on N3
 	assert.Equal(0, N3.paths.getSize(), "N3 should have 0 paths at the beginning")
-	body = fmt.Sprintf(`{"ip":"127.0.0.3","path_id":"%v"}`, newPathID.String())
+	body = fmt.Sprintf(`{"ip":"127.0.0.2","path_id":"%v"}`, newPathID.String())
 	t.Log("post path on N3 body", body)
 	postpathres3, resBody := sendPostRequest("http://127.0.0.3:3000/path", body)
 	defer postpathres3.Body.Close()
-	if postpathres3.StatusCode != http.StatusOK {
+	if postpathres3.StatusCode != http.StatusCreated {
 		t.Fatal(postpathres3.StatusCode, postpathres3.Status, resBody, "N3:POST /path: wrong status code")
 	}
 	t.Log(resBody)
