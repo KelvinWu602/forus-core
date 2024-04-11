@@ -141,7 +141,7 @@ func (n *Node) StartHTTP() {
 	router := gin.Default()
 
 	router.GET("/message-keys", n.handleGetAllMessageKeys)
-	router.GET("/messages", n.handleGetMessagesByKey)
+	router.POST("/messages", n.handleGetMessagesByKey)
 	router.GET("/message/:key", n.handleGetMessage)
 	router.POST("/message/:key", n.handlePostMessage)
 
