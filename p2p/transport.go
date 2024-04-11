@@ -20,4 +20,5 @@ type Transport interface {
 type TCPConnectionProfile struct {
 	Conn    *net.Conn
 	Encoder *gob.Encoder
+	IP      string
 }

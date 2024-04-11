@@ -10,6 +10,7 @@ import (
 )
 
 func NewCoverMessage(proxyPublicKey []byte, symmetricKey big.Int) (*ApplicationMessage, error) {
+	logMsg2("NewCoverMessage", fmt.Sprintf("create cover message with proxy key = %v, symmetric key = %v", proxyPublicKey, symmetricKey))
 	key := [48]byte{}
 	rand.Read(key[:])
 	content := [1024]byte{}

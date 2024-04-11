@@ -31,14 +31,16 @@ func msg(nodeName string, triggerPoint string, msg string) string {
 	)
 }
 
-func logProtocolMessageHandlerError(nodeName string, handlerName string, conn net.Conn, err error, input any) {
+func logProtocolMessageHandlerError(nodeName string, handlerName string, conn net.Conn, err error, input any, description string) {
 	// the TCP address that the TCP server listen at
 	m := fmt.Sprintf(
 		`Protocol Message Handle Error: from = %v, input = %v
+	%v
 	%v`,
 		conn.RemoteAddr().String(),
 		input,
 		err,
+		description,
 	)
 
 	log.Println(msg(nodeName, handlerName, m))

@@ -60,13 +60,13 @@ func (node *Node) markPublishJobStatus(jobID uuid.UUID, job PublishJobProfile) {
 	}
 }
 
-func (node *Node) blacklistPathIDs() []uuid.UUID {
+func (node *Node) blacklistPaths() []PathProfile {
 	// for every path, check if FailureCount > failureThreshold
-	results := []uuid.UUID{}
+	results := []PathProfile{}
 	node.paths.iterate(func(pathID uuid.UUID, path PathProfile) {
 		if path.failureCount >= node.v.GetInt("MOVE_UP_REQUIREMENT_FAILURE_THRESHOLD") {
 			logMsg(node.name, "blacklistPathIDs", fmt.Sprintf("Blacklist Path %v: failureCount = %v > %v = threshold", pathID, path.failureCount, node.v.GetInt("MOVE_UP_REQUIREMENT_FAILURE_THRESHOLD")))
-			results = append(results, pathID)
+			results = append(results, path)
 		}
 	}, false)
 
@@ -211,70 +211,55 @@ func (n *Node) handleRealMessage(asymOutput []byte, coverProfile CoverNodeProfil
 }
 
 // move up one step
-func (n *Node) MoveUp(pathID uuid.UUID) {
+func (n *Node) MoveUp(blacklistPath PathProfile) {
+	logMsg(n.name, "MoveUp", fmt.Sprintf("Starts, Path: %v", blacklistPath.uuid.String()))
 
-	logMsg(n.name, "MoveUp", fmt.Sprintf("Starts, Path: %v", pathID.String()))
-
-	value, ok := n.paths.getValue(pathID)
-	if ok {
-		originalNext := value.next
-		originalNextNext := value.next2
-		// 1) check what originalNextNext is
-		if originalNextNext == "ImmutableStorage" {
-			// next-next-hop is ImmutableStorage --> next-hop is proxy --> cannot move up, delete this blacklist path
-			n.deletePathAndRelatedCovers(pathID)
-			logMsg(n.name, "MoveUp", fmt.Sprintf("Ends, Path: %v:  Case: Next-Next is ImmutableStorage, path is removed", pathID.String()))
-			return
-		}
-		// 2) send verifyCover(originalNext) to originNextNext
-		resp, err := n.sendVerifyCoverRequest(originalNextNext, originalNext)
-		if err != nil {
-			// next-next-hop is unreachable --> cannot move up, delete this blacklist path
-			n.deletePathAndRelatedCovers(pathID)
-			logError(n.name, "MoveUp", err, fmt.Sprintf("Ends, Path: %v:  Case: error during verifyCover, path is removed", pathID.String()))
-			return
-		}
-		if resp.IsVerified {
-			// connectPath with originalNextNext, it will overwrite the current blacklist path
-			resp, err := n.ConnectPath(originalNextNext, pathID)
-			if err == nil && resp.Accepted {
-				// if success, done
-				logMsg(n.name, "MoveUp", fmt.Sprintf("Ends, Path: %v:  Case: Successfully connected to next next hop", pathID.String()))
-				return
-			}
-		}
-
-		// 3) if resp is not verified OR connectPath failed
-		// self becomes proxy
-		newPathProfile := PathProfile{
-			uuid:         uuid.New(),
-			next:         "ImmutableStorage",
-			next2:        "",
-			proxyPublic:  n.publicKey,
-			successCount: 0,
-			failureCount: 0,
-		}
-		// delete cover nodes that are connected to the old blacklist path
-		n.deletePathAndRelatedCovers(pathID)
-		n.paths.setValue(newPathProfile.uuid, newPathProfile)
-	}
-
-	logMsg(n.name, "MoveUp", fmt.Sprintf("Ends, Path: %v:  Case: Self becomes proxy success", pathID.String()))
-}
-
-// MoveUp helper: move cover nodes
-func (n *Node) deletePathAndRelatedCovers(pathID uuid.UUID) {
-	path, found := n.paths.getValue(pathID)
-	if !found {
+	originalPathId := blacklistPath.uuid
+	originalNext := blacklistPath.next
+	originalNextNext := blacklistPath.next2
+	// 1) check what originalNextNext is
+	if originalNextNext == "ImmutableStorage" {
+		// next-next-hop is ImmutableStorage --> next-hop is proxy --> cannot move up, simply return
+		logMsg(n.name, "MoveUp", fmt.Sprintf("Ends, Path: %v:  Case: Next-Next is ImmutableStorage, path is removed", originalPathId.String()))
 		return
 	}
+	// 2) send verifyCover(originalNext) to originNextNext
+	resp, err := n.sendVerifyCoverRequest(originalNextNext, originalNext)
+	if err != nil {
+		// next-next-hop is unreachable --> cannot move up, simply return
+		logError(n.name, "MoveUp", err, fmt.Sprintf("Ends, Path: %v:  Case: error during verifyCover, path is removed", originalPathId.String()))
+		return
+	}
+	if resp.IsVerified {
+		// connectPath with originalNextNext, it will overwrite the current blacklist path
+		resp, err := n.ConnectPath(originalNextNext, originalPathId)
+		if err == nil && resp.Accepted {
+			newPath, _ := n.paths.getValue(blacklistPath.uuid)
+			// if success, done
+			logMsg(n.name, "MoveUp", fmt.Sprintf("Ends, Path: %v:  Case: Successfully connected to next next hop\n		oldPath = %v\n		newPath = %v", originalPathId.String(), blacklistPath, newPath))
+			return
+		}
+	}
+
+	// 3) if resp is not verified OR connectPath failed
 	n.covers.iterate(func(coverIP string, coverProfile CoverNodeProfile) {
-		if coverProfile.treeUUID == pathID {
+		if coverProfile.treeUUID == originalPathId {
 			// this will terminate the corresponding handle application msg worker, which will in turn clean the cover profile
 			n.covers.data[coverIP].cancelFunc(errors.New("deleted during move up"))
 		}
 	}, false)
-	path.cancelFunc(errors.New("deleted during move up"))
+
+	// self becomes proxy
+	newPathProfile := PathProfile{
+		uuid:         uuid.New(),
+		next:         "ImmutableStorage",
+		next2:        "",
+		proxyPublic:  n.publicKey,
+		successCount: 0,
+		failureCount: 0,
+	}
+	n.paths.setValue(newPathProfile.uuid, newPathProfile)
+	logMsg(n.name, "MoveUp", fmt.Sprintf("Ends, Path %v replaced by %v:  Case: Self becomes proxy success, dangling covers removed", blacklistPath.uuid, newPathProfile.uuid))
 }
 
 // Tree Formation Process by aggregating QueryPath, CreateProxy, ConnectPath & joining cluster
@@ -390,13 +375,14 @@ func (node *Node) maintainPathsHealthWorker() {
 	var fixPathWg sync.WaitGroup
 	for {
 		logMsg(node.name, "maintainPathsHealthWorker", "Iteration Starts")
-		for _, pathID := range node.blacklistPathIDs() {
-			logMsg(node.name, "maintainPathsHealthWorker", fmt.Sprintf("Handle blacklist path: %v", pathID))
+		for _, blacklistPath := range node.blacklistPaths() {
+			logMsg(node.name, "maintainPathsHealthWorker", fmt.Sprintf("Handle blacklist path: %v", blacklistPath.uuid.String()))
 			moveUpWg.Add(1)
-			go func(pathID uuid.UUID) {
-				node.MoveUp(pathID)
+			blacklistPath.cancelFunc(errors.New("removed by maintain paths health worker due to blacklisted"))
+			go func(blacklistPath PathProfile) {
+				node.MoveUp(blacklistPath)
 				moveUpWg.Done()
-			}(pathID)
+			}(blacklistPath)
 		}
 		moveUpWg.Wait()
 		logMsg(node.name, "maintainPathsHealthWorker", "Blacklist Paths Check Done")
@@ -438,24 +424,29 @@ func (node *Node) maintainPathQuantityWorker() {
 
 }
 
-func (node *Node) sendCoverMessageWorker(ctx context.Context, connProfile *TCPConnectionProfile, pathID uuid.UUID) {
-	defer node.paths.deleteValue(pathID)
-	if connProfile == nil || connProfile.Conn == nil || connProfile.Encoder == nil {
-		logMsg(node.name, "sendCoverMessageWorker", fmt.Sprintf("sendCoverMessageWorker on path %v failed to start due to connProfile = nil.", pathID.String()))
-		return
-	}
-	conn := *connProfile.Conn
-	logMsg(node.name, "sendCoverMessageWorker", fmt.Sprintf("sendCoverMessageWorker to %s on path %v is started successfully.", conn.RemoteAddr().String(), pathID.String()))
-	defer conn.Close()
+// worker should only read the copy of data at the moment when it starts
+func (node *Node) sendCoverMessageWorker(ctx context.Context, connProfile TCPConnectionProfile, path PathProfile) {
+	// set up safe clean up operation
+	defer func() {
+		if path.next == connProfile.IP {
+			node.paths.deleteValue(path.uuid)
+		}
+		if connProfile.Conn != nil {
+			(*connProfile.Conn).Close()
+		}
+	}()
 
+	// initialize states
+	target := connProfile.IP
+	pathID := path.uuid
 	encoder := connProfile.Encoder
 	interval := node.v.GetDuration("COVER_MESSAGE_SENDING_INTERVAL")
+	logMsg(node.name, "sendCoverMessageWorker", fmt.Sprintf("sendCoverMessageWorker to %s on path %v is started successfully.", target, pathID.String()))
 
 	for {
 		doneSuccess := make(chan bool)
 		doneErr := make(chan error)
 		go func() {
-			path, _ := node.paths.getValue(pathID)
 			coverMsg, err := NewCoverMessage(path.proxyPublic, path.symKey)
 			if err != nil {
 				doneErr <- err
@@ -474,30 +465,33 @@ func (node *Node) sendCoverMessageWorker(ctx context.Context, connProfile *TCPCo
 		// check if terminated
 		select {
 		case err := <-doneErr:
-			logError(node.name, "sendCoverMessageWorker", err, fmt.Sprintf("error when sending cover message to %s", conn.RemoteAddr().String()))
+			logError(node.name, "sendCoverMessageWorker", err, fmt.Sprintf("error when sending cover message to %s", target))
+			return
+		case <-ctx.Done():
+			logMsg(node.name, "sendCoverMessageWorker", fmt.Sprintf("TERMINATED BY OTHERS %s", target))
 			return
 		case <-doneSuccess:
 			// postpone tcp connection deadline
 			(*connProfile.Conn).SetDeadline(time.Now().Add(interval).Add(time.Minute))
-			logMsg(node.name, "sendCoverMessageWorker", fmt.Sprintf("cover message to %s on path %v is sent successfully.", conn.RemoteAddr().String(), pathID.String()))
-		case <-ctx.Done():
-			logMsg(node.name, "sendCoverMessageWorker", fmt.Sprintf("TERMINATED BY OTHERS %s", conn.RemoteAddr().String()))
-			return
+			logMsg(node.name, "sendCoverMessageWorker", fmt.Sprintf("cover message to %s on path %v is sent successfully.", target, pathID.String()))
 		}
 		time.Sleep(interval)
 	}
 }
 
-func (node *Node) handleApplicationMessageWorker(ctx context.Context, conn net.Conn, coverIp string) {
-	defer node.covers.deleteValue(coverIp)
-	if conn == nil {
-		logMsg(node.name, "handleApplicationMessageWorker", fmt.Sprintf("handleApplicationMessageWorker failed to start due to conn = nil, CoverIP = %v.", coverIp))
-		return
-	}
-	defer conn.Close()
-	logMsg(node.name, "handleApplicationMessageWorker", fmt.Sprintf("handleApplicationMessageWorker from %s is started", conn.RemoteAddr().String()))
+func (node *Node) handleApplicationMessageWorker(ctx context.Context, conn net.Conn, coverProfile CoverNodeProfile, forwardPathProfile PathProfile) {
+	// set up safe clean up operation
+	defer func() {
+		defer node.covers.deleteValue(coverProfile.cover)
+		if conn != nil {
+			defer conn.Close()
+		}
+	}()
 
+	// initialize states
+	coverIP := coverProfile.cover
 	decoder := gob.NewDecoder(conn)
+	logMsg(node.name, "handleApplicationMessageWorker", fmt.Sprintf("handleApplicationMessageWorker from %s is started", coverIP))
 
 	for {
 		doneSuccess := make(chan ApplicationMessage)
@@ -510,7 +504,6 @@ func (node *Node) handleApplicationMessageWorker(ctx context.Context, conn net.C
 			} else {
 				doneSuccess <- msg
 			}
-
 			defer close(doneSuccess)
 			defer close(doneErr)
 		}()
@@ -518,21 +511,9 @@ func (node *Node) handleApplicationMessageWorker(ctx context.Context, conn net.C
 		select {
 		case msg := <-doneSuccess:
 			conn.SetDeadline(time.Now().Add(node.v.GetDuration("APPLICATION_MESSAGE_RECEIVING_INTERVAL")).Add(time.Minute))
-
-			coverProfile, found := node.covers.getValue(coverIp)
-			if !found {
-				logMsg(node.name, "handleApplicationMessageWorker", fmt.Sprintf("[Cover Not Found]:failed to handle application message from %v", coverIp))
-				return
-			}
-			forwardPathProfile, found := node.paths.getValue(coverProfile.treeUUID)
-			if !found {
-				logMsg(node.name, "handleApplicationMessageWorker", fmt.Sprintf("[Path Not Found]:failed to handle application message from %v to path %v", coverIp, coverProfile.treeUUID))
-				return
-			}
-
-			// in the whole handleApplicationMessage scope, should assume coverProfile and forwardPathProfile are valid
+			// in the whole handleApplicationMessageWorker scope, should assume coverProfile and forwardPathProfile are valid
 			if err := node.handleApplicationMessage(msg, coverProfile, forwardPathProfile); err != nil {
-				logError(node.name, "handleApplicationMessageWorker", err, fmt.Sprintf("failed to handle application message from %v to path %v: %v", coverIp, coverProfile.treeUUID, msg))
+				logError(node.name, "handleApplicationMessageWorker", err, fmt.Sprintf("failed to handle application message from %v to path %v: %v", coverIP, coverProfile.treeUUID, msg))
 			}
 		case err := <-doneErr:
 			logError(node.name, "handleApplicationMessageWorker", err, fmt.Sprintf("error when receiving application message from %s", conn.RemoteAddr().String()))

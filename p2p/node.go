@@ -277,11 +277,13 @@ func (n *Node) QueryPath(ip string) (*QueryPathResp, []PathProfile, error) {
 		for _, path := range paths {
 			pathID, err := DecryptUUID(path.EncryptedTreeUUID, n.privateKey)
 			if err != nil {
+				logError(n.name, "QueryPath", err, "halfOpenPath failed to decrypt tree uuid, not verified")
 				continue
 			}
-			// skip paths that this node have already added
-			_, alreadyConnected := n.paths.getValue(pathID)
-			if alreadyConnected {
+			// skip paths that this node have already added, except if ip == next-next hop (during move up, can join the same path )
+			connectPath, alreadyConnected := n.paths.getValue(pathID)
+			if alreadyConnected && connectPath.next2 != ip {
+				logError(n.name, "QueryPath", err, "halfOpenPath already connected, not verified")
 				continue
 			}
 
@@ -306,7 +308,7 @@ func (n *Node) QueryPath(ip string) (*QueryPathResp, []PathProfile, error) {
 		}
 	}
 
-	logMsg(n.name, "QueryPath", fmt.Sprintf("Ends %v, Addr: %v", err, ip))
+	logMsg(n.name, "QueryPath", fmt.Sprintf("Ends err = %v, Addr: %v, resp.Path = %v", err, ip, resp.Paths))
 
 	return resp, verifiedPaths, err
 }
@@ -338,7 +340,7 @@ func (n *Node) ConnectPath(ip string, treeID uuid.UUID) (*ConnectPathResp, error
 
 		// create new path profile
 		ctx, cancel := context.WithCancelCause(context.Background())
-		n.paths.setValue(treeID, PathProfile{
+		newPath := PathProfile{
 			uuid:         halfOpenPathProfile.uuid,
 			next:         halfOpenPathProfile.next,
 			next2:        halfOpenPathProfile.next2,
@@ -347,10 +349,11 @@ func (n *Node) ConnectPath(ip string, treeID uuid.UUID) (*ConnectPathResp, error
 			successCount: 0,
 			failureCount: 0,
 			cancelFunc:   cancel,
-		})
+		}
+		n.paths.setValue(treeID, newPath)
 
 		// Start the sendCoverMessageWorker
-		go n.sendCoverMessageWorker(ctx, connProfile, treeID)
+		go n.sendCoverMessageWorker(ctx, *connProfile, newPath)
 		// Store a pointer to the opened tcp connection for later publish jobs
 		n.openConnections.setValue(treeID, connProfile)
 	}
@@ -382,7 +385,7 @@ func (n *Node) CreateProxy(ip string) (*CreateProxyResp, error) {
 		}
 		// create new path profile
 		ctx, cancel := context.WithCancelCause(context.Background())
-		n.paths.setValue(treeID, PathProfile{
+		newPath := PathProfile{
 			uuid:         treeID,
 			next:         ip,
 			next2:        "ImmutableStorage",
@@ -391,10 +394,11 @@ func (n *Node) CreateProxy(ip string) (*CreateProxyResp, error) {
 			successCount: 0,
 			failureCount: 0,
 			cancelFunc:   cancel,
-		})
+		}
+		n.paths.setValue(treeID, newPath)
 
 		// Start the sendCoverMessageWorker
-		go n.sendCoverMessageWorker(ctx, connProfile, treeID)
+		go n.sendCoverMessageWorker(ctx, *connProfile, newPath)
 		n.openConnections.setValue(treeID, connProfile)
 	}
 
