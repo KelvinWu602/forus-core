@@ -183,7 +183,7 @@ func (n *Node) handleConnectPathReq(conn net.Conn, content *ConnectPathReq) erro
 	forwardPath, requestPathExists := n.paths.getValue(requestedPathID)
 
 	shouldAcceptConnection := !alreadyMyCover && !tooManyCovers && requestPathExists
-	logMsg(n.name, "handleConnectPathReq", fmt.Sprintf("shouldAcceptConnection = %v from requester %v on path %v\n		covers count = %v / %v\n	already covers = %v", shouldAcceptConnection, conn.RemoteAddr().String(), requestedPathID, n.covers.getSize(), n.v.GetInt("MAXIMUM_NUMBER_OF_COVER_NODES"), n.covers.data))
+	logMsg(n.name, "handleConnectPathReq", fmt.Sprintf("shouldAcceptConnection = %v from requester %v on path %v\n		covers count = %v / %v\n		already covers = %v", shouldAcceptConnection, conn.RemoteAddr().String(), requestedPathID, n.covers.getSize(), n.v.GetInt("MAXIMUM_NUMBER_OF_COVER_NODES"), n.covers.data))
 
 	var connectPathResponse ConnectPathResp
 	var ctx context.Context
@@ -264,7 +264,7 @@ func (n *Node) handleCreateProxyReq(conn net.Conn, content *CreateProxyReq) erro
 		}
 	}, true)
 	shouldAcceptConnection := !alreadyMyCover && !tooManyCovers && !isProxyAlready
-	logMsg(n.name, "handleCreateProxyReq", fmt.Sprintf("shouldAcceptConnection = %v from requester %v\n		covers count = %v / %v\n	already covers = %v\n		already proxy = %v", shouldAcceptConnection, coverIp, n.covers.getSize(), n.v.GetInt("MAXIMUM_NUMBER_OF_COVER_NODES"), n.covers.data, proxyPathID))
+	logMsg(n.name, "handleCreateProxyReq", fmt.Sprintf("shouldAcceptConnection = %v from requester %v\n		covers count = %v / %v\n		already covers = %v\n		already proxy = %v", shouldAcceptConnection, coverIp, n.covers.getSize(), n.v.GetInt("MAXIMUM_NUMBER_OF_COVER_NODES"), n.covers.data, proxyPathID))
 
 	var createProxyResponse CreateProxyResp
 	var ctx context.Context
@@ -348,7 +348,7 @@ func (n *Node) handleCreateProxyReq(conn net.Conn, content *CreateProxyReq) erro
 // A generic function used to send tcp requests and wait for response with a timeout.
 // destAddr can contain only IP address: TCP_SERVER_LISTEN_PORT will be appended as dest port
 func tcpSendAndWaitResponse[RESPONSE_TYPE any](reqBody *ProtocolMessage, ip string, keepAlive bool, v *viper.Viper, name string) (*RESPONSE_TYPE, *TCPConnectionProfile, error) {
-	logMsg(name, "tcpSendAndWaitResponse", fmt.Sprintf("reqBody = %v, destAddr = %v, keepAlive = %v", *reqBody, ip, keepAlive))
+	// logMsg(name, "tcpSendAndWaitResponse", fmt.Sprintf("reqBody = %v, destAddr = %v, keepAlive = %v", *reqBody, ip, keepAlive))
 
 	// In Localhost Testing, should send TCP requests on a specific loopback address
 	targetAddr := ip + ":3001"
@@ -388,7 +388,7 @@ func tcpSendAndWaitResponse[RESPONSE_TYPE any](reqBody *ProtocolMessage, ip stri
 		logError(name, "tcpSendAndWaitResponse", err, fmt.Sprintf("error at waitForResponse[RESPONSE_TYPE](conn) where conn.RemoteAddr().String() = %v", conn.RemoteAddr().String()))
 		return nil, nil, err
 	}
-	return response, &TCPConnectionProfile{Conn: &conn, Encoder: encoder}, nil
+	return response, &TCPConnectionProfile{Conn: &conn, Encoder: encoder, IP: ip}, nil
 }
 
 // A generic function used to wait for tcp response.

@@ -428,7 +428,10 @@ func (node *Node) maintainPathQuantityWorker() {
 func (node *Node) sendCoverMessageWorker(ctx context.Context, connProfile TCPConnectionProfile, path PathProfile) {
 	// set up safe clean up operation
 	defer func() {
-		if path.next == connProfile.IP {
+		// path may have replaced already, need to retrieve the latest path
+		currentPath, _ := node.paths.getValue(path.uuid)
+		logMsg(node.name, "sendCoverMessageWorker", fmt.Sprintf("cleaning... path_id = %v, path.next = %v, targetIP = %v", currentPath.uuid, currentPath.next, connProfile.IP))
+		if currentPath.next == connProfile.IP {
 			node.paths.deleteValue(path.uuid)
 		}
 		if connProfile.Conn != nil {
@@ -482,6 +485,7 @@ func (node *Node) sendCoverMessageWorker(ctx context.Context, connProfile TCPCon
 func (node *Node) handleApplicationMessageWorker(ctx context.Context, conn net.Conn, coverProfile CoverNodeProfile, forwardPathProfile PathProfile) {
 	// set up safe clean up operation
 	defer func() {
+		logMsg(node.name, "sendCoverMessageWorker", fmt.Sprintf("cleaning... coverIP = %v", coverProfile.cover))
 		defer node.covers.deleteValue(coverProfile.cover)
 		if conn != nil {
 			defer conn.Close()
