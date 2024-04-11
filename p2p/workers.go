@@ -400,6 +400,7 @@ func (node *Node) maintainPathsHealthWorker() {
 					node.paths.setValue(report.SelfProfile.uuid, report.SelfProfile)
 				}
 				fixPathWg.Done()
+				logMsg(node.name, "maintainPathsHealthWorker", fmt.Sprintf("Handle invalid path Done: %v %v", report.SelfProfile.uuid, report.HandleType))
 			}(report)
 		}
 		fixPathWg.Wait()
@@ -478,7 +479,14 @@ func (node *Node) sendCoverMessageWorker(ctx context.Context, connProfile TCPCon
 			(*connProfile.Conn).SetDeadline(time.Now().Add(interval).Add(time.Minute))
 			logMsg(node.name, "sendCoverMessageWorker", fmt.Sprintf("cover message to %s on path %v is sent successfully.", target, pathID.String()))
 		}
-		time.Sleep(interval)
+
+		// if terminated during sleep
+		select {
+		case <-ctx.Done():
+			logMsg(node.name, "sendCoverMessageWorker", fmt.Sprintf("TERMINATED BY OTHERS %s", target))
+			return
+		case <-time.After(interval):
+		}
 	}
 }
 
