@@ -140,6 +140,8 @@ func (n *Node) StartHTTP() {
 	logMsg(n.name, "StartHTTP", fmt.Sprintf("setting up HTTP server at %v", tcpAddr))
 	router := gin.Default()
 
+	router.GET("/message-keys", n.handleGetAllMessageKeys)
+	router.GET("/messages", n.handleGetMessagesByKey)
 	router.GET("/message/:key", n.handleGetMessage)
 	router.POST("/message/:key", n.handlePostMessage)
 
@@ -157,6 +159,8 @@ func (n *Node) StartHTTP() {
 	router.GET("/key-pair", n.handleGetKeyPair)
 
 	router.GET("/configs", n.handleGetConfigs)
+
+	router.GET("/publish-condition", n.handleGetPublishCondition)
 
 	go router.Run(tcpAddr)
 	logMsg(n.name, "StartHTTP", fmt.Sprintf("HTTP server running on %v", tcpAddr))

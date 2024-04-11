@@ -9,6 +9,10 @@ type HTTPPostMessageReq struct {
 	PathID  uuid.UUID `json:"path_id,omitempty"`
 }
 
+type HTTPPostMessagesReq struct {
+	Keys [][]byte `json:"keys"`
+}
+
 type HTTPPostMessageResp struct {
 	PublishJobId uuid.UUID `json:"publish_job_id,omitempty"`
 }
@@ -16,6 +20,11 @@ type HTTPPostMessageResp struct {
 type HTTPPostPathReq struct {
 	IP     string    `json:"ip,omitempty"`
 	PathID uuid.UUID `json:"path_id,omitempty"`
+}
+
+type HTTPSchemaKeyMessage struct {
+	Key     []byte `json:"key"`
+	Content []byte `json:"content"`
 }
 
 type HTTPSchemaMessage struct {

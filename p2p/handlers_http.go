@@ -35,6 +35,49 @@ func (n *Node) handleGetMessage(c *gin.Context) {
 	})
 }
 
+func (n *Node) handleGetAllMessageKeys(c *gin.Context) {
+	// operation
+	resp, err := n.isClient.AvailableIDs()
+	if err != nil {
+		c.IndentedJSON(http.StatusNotFound, gin.H{"message": "message not found", "error": err.Error()})
+		return
+	}
+	// response
+	c.IndentedJSON(http.StatusOK, resp.Keys)
+}
+
+func (n *Node) handleGetMessagesByKey(c *gin.Context) {
+	// read body param
+	var body HTTPPostMessagesReq
+	if err := c.BindJSON(&body); err != nil {
+		c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "request body is invalid", "error": err.Error()})
+		return
+	}
+	if body.Keys == nil || len(body.Keys) == 0 {
+		c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "keys is missing or empty"})
+		return
+	}
+	messages := []HTTPSchemaKeyMessage{}
+
+	for _, key := range body.Keys {
+		if len(key) != 48 {
+			c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "key length is not 48 bytes", "error": fmt.Sprintf("key length is %v bytes", len(key))})
+			return
+		}
+		// operation
+		resp, err := n.isClient.Read(key)
+		if err != nil {
+			return
+		}
+		messages = append(messages, HTTPSchemaKeyMessage{
+			Key:     key,
+			Content: resp.Content,
+		})
+	}
+	// response
+	c.IndentedJSON(http.StatusOK, messages)
+}
+
 func (n *Node) handlePostMessage(c *gin.Context) {
 	// read path param
 	keyBase64 := c.Param("key")
@@ -335,5 +378,15 @@ func (n *Node) handleGetConfigs(c *gin.Context) {
 		"CLUSTER_CONTACT_NODE_IP":              n.v.GetString("CLUSTER_CONTACT_NODE_IP"),
 		// bool
 		"TESTING_FLAG": n.v.GetBool("TESTING_FLAG"),
+	})
+}
+
+func (n *Node) handleGetPublishCondition(c *gin.Context) {
+	// response
+	c.IndentedJSON(http.StatusOK, gin.H{
+		"status":                            n.canPublish(true),
+		"no_of_covers":                      n.covers.getSize(),
+		"no_of_paths":                       n.paths.getSize(),
+		"NUMBER_OF_COVER_NODES_FOR_PUBLISH": n.v.GetInt("NUMBER_OF_COVER_NODES_FOR_PUBLISH"),
 	})
 }
