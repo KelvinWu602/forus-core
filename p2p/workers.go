@@ -265,17 +265,17 @@ func (n *Node) MoveUp(blacklistPath PathProfile) {
 // Tree Formation Process by aggregating QueryPath, CreateProxy, ConnectPath & joining cluster
 func (n *Node) getMorePaths() {
 
-	logMsg(n.name, "fulfillPublishCondition", "Started")
+	logMsg(n.name, "getMorePaths", "Started")
 
 	// Get all cluster members IP
 	resp, err := n.ndClient.GetMembers()
 	if err != nil {
-		logError(n.name, "fulfillPublishCondition", err, "Get Member Error. Iteration Skip")
+		logError(n.name, "getMorePaths", err, "Get Member Error. Iteration Skip")
 		return
 	}
 	clusterSize := len(resp.Member)
 	if clusterSize <= 0 {
-		logMsg(n.name, "fulfillPublishCondition", "Get Members return empty array. Iteration Skip")
+		logMsg(n.name, "getMorePaths", fmt.Sprintf("Get Members return %v. Iteration Skip", resp.Member))
 		return
 	}
 
@@ -286,19 +286,19 @@ func (n *Node) getMorePaths() {
 		go func() {
 			peerChoice := rand.Intn(clusterSize)
 			memberIP := resp.Member[peerChoice]
-			logMsg(n.name, "fulfillPublishCondition", fmt.Sprintf("Connect %v", memberIP))
+			logMsg(n.name, "getMorePaths", fmt.Sprintf("Connect %v", memberIP))
 			_, pendingPaths, _ := n.QueryPath(memberIP)
 			if len(pendingPaths) > 0 {
 				// if the peer offers some path, connect to it
 				// will not connect to all path under the same node to diverse risk
 				pathChoice := rand.Intn(len(pendingPaths))
 				if _, err := n.ConnectPath(memberIP, pendingPaths[pathChoice].uuid); err != nil {
-					logError(n.name, "fulfillPublishCondition", err, fmt.Sprintf("ConnectPath Error: Connect %v", memberIP))
+					logError(n.name, "getMorePaths", err, fmt.Sprintf("ConnectPath Error: Connect %v", memberIP))
 				}
 			} else {
 				// if the peer does not have path, ask it to become a proxy
 				if _, err := n.CreateProxy(memberIP); err != nil {
-					logError(n.name, "fulfillPublishCondition", err, fmt.Sprintf("CreateProxy Error: Connect %v", memberIP))
+					logError(n.name, "getMorePaths", err, fmt.Sprintf("CreateProxy Error: Connect %v", memberIP))
 				}
 			}
 			done <- true
@@ -309,11 +309,11 @@ func (n *Node) getMorePaths() {
 			time.Sleep(n.v.GetDuration("FULFILL_PUBLISH_CONDITION_INTERVAL"))
 			continue
 		case <-timeout:
-			logMsg(n.name, "fulfillPublishCondition", "Iteration Timeout")
+			logMsg(n.name, "getMorePaths", "Iteration Timeout")
 			return
 		}
 	}
-	logMsg(n.name, "fulfillPublishCondition", "Iteration Success")
+	logMsg(n.name, "getMorePaths", "Iteration Success")
 }
 
 // workers

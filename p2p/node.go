@@ -42,12 +42,14 @@ type Node struct {
 }
 
 func StartNode() {
-	StartNodeInternal("config.yaml")
+	node := StartNodeInternal("config.yaml")
+	defer node.ndClient.LeaveCluster()
 
 	terminate := make(chan os.Signal, 1)
 	signal.Notify(terminate, os.Interrupt, syscall.SIGTERM)
 	// wait for the SIGINT signal (Ctrl+C)
 	<-terminate
+
 }
 
 func StartNodeInternal(configPath string) *Node {
@@ -55,10 +57,6 @@ func StartNodeInternal(configPath string) *Node {
 	initGobTypeRegistration()
 	node := NewNode(v)
 	node.initDependencies(v)
-
-	defer func() {
-		node.ndClient.LeaveCluster()
-	}()
 
 	go node.StartTCP()
 	// join cluster after TCP server is set up

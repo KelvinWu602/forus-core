@@ -33,8 +33,10 @@ func NewMockND(ownerAddr string, members map[string][]string, joinleavelock *syn
 func (nd *MockND) JoinCluster(contact string) error {
 	nd.joinleavelock.Lock()
 	defer nd.joinleavelock.Unlock()
+	log.Println("before joincluster", nd.members)
 
-	toJoin := nd.members[contact]
+	toJoin := make([]string, len(nd.members[contact]))
+	copy(toJoin, nd.members[contact])
 	mygroup := nd.members[nd.ownerAddr]
 
 	for _, oldgroupmembers := range mygroup {
@@ -43,13 +45,20 @@ func (nd *MockND) JoinCluster(contact string) error {
 		}
 	}
 
+	// update my group
 	mygroup = append(mygroup, contact)
 	mygroup = append(mygroup, toJoin...)
-
-	toJoin = append(toJoin, nd.ownerAddr)
-
-	nd.members[contact] = toJoin
 	nd.members[nd.ownerAddr] = mygroup
+
+	// members to be update
+	toBeUpdated := []string{}
+	copy(toBeUpdated, append(toJoin, contact))
+	for i, member := range toBeUpdated {
+		newGroup := append(toBeUpdated[:i], toBeUpdated[i+1:]...)
+		nd.members[member] = append(newGroup, nd.ownerAddr)
+	}
+
+	log.Println("after joincluster", nd.members)
 	return nil
 }
 
@@ -57,6 +66,7 @@ func (nd *MockND) JoinCluster(contact string) error {
 func (nd *MockND) LeaveCluster() error {
 	nd.joinleavelock.Lock()
 	defer nd.joinleavelock.Unlock()
+	log.Println("before leave cluster", nd.members)
 
 	for member, memberGroup := range nd.members {
 		if member != nd.ownerAddr {
@@ -71,6 +81,8 @@ func (nd *MockND) LeaveCluster() error {
 			delete(nd.members, nd.ownerAddr)
 		}
 	}
+
+	log.Println("after leave cluster", nd.members)
 	return nil
 }
 
@@ -79,6 +91,7 @@ func (nd *MockND) LeaveCluster() error {
 func (nd *MockND) GetMembers() ([]string, error) {
 	nd.joinleavelock.RLock()
 	defer nd.joinleavelock.RUnlock()
+	log.Println("members = ", nd.members[nd.ownerAddr])
 	return nd.members[nd.ownerAddr], nil
 }
 
