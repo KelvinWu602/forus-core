@@ -129,3 +129,5 @@ paths modification:
 
 paths delete
 - terminate send cover msg worker
+
+pass maintain_path_health_test
