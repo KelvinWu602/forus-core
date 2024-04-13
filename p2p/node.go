@@ -138,10 +138,10 @@ func (n *Node) StartHTTP() {
 	logMsg(n.name, "StartHTTP", fmt.Sprintf("setting up HTTP server at %v", tcpAddr))
 	router := gin.Default()
 
-	router.GET("/message-keys", n.handleGetAllMessageKeys)
-	router.POST("/messages", n.handleGetMessagesByKey)
 	router.GET("/message/:key", n.handleGetMessage)
 	router.POST("/message/:key", n.handlePostMessage)
+	router.POST("/messages", n.handleGetMessagesByKey)
+	router.GET("/message-keys", n.handleGetAllMessageKeys)
 
 	router.GET("/path/:id", n.handleGetPath)
 	router.GET("/paths", n.handleGetPaths)

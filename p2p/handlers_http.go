@@ -13,10 +13,10 @@ import (
 
 func (n *Node) handleGetMessage(c *gin.Context) {
 	// read path param
-	keyBase64 := c.Param("key")
-	key, err := base64.URLEncoding.DecodeString(keyBase64)
+	keyBase64Url := c.Param("key")
+	key, err := base64.URLEncoding.DecodeString(keyBase64Url)
 	if err != nil {
-		c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "key should be base64 encoded string", "error": err.Error(), "input_key": keyBase64})
+		c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "key should be base64 encoded string", "error": err.Error(), "input_key": keyBase64Url})
 		return
 	}
 	if len(key) != 48 {
@@ -42,8 +42,13 @@ func (n *Node) handleGetAllMessageKeys(c *gin.Context) {
 		c.IndentedJSON(http.StatusNotFound, gin.H{"message": "message not found", "error": err.Error()})
 		return
 	}
+	keysBase64Url := []string{}
+	for _, key := range resp.Keys {
+		keyBase64Url := base64.URLEncoding.EncodeToString(key)
+		keysBase64Url = append(keysBase64Url, keyBase64Url)
+	}
 	// response
-	c.IndentedJSON(http.StatusOK, resp.Keys)
+	c.IndentedJSON(http.StatusOK, keysBase64Url)
 }
 
 func (n *Node) handleGetMessagesByKey(c *gin.Context) {
@@ -59,9 +64,14 @@ func (n *Node) handleGetMessagesByKey(c *gin.Context) {
 	}
 	messages := []HTTPSchemaKeyMessage{}
 
-	for _, key := range body.Keys {
+	for _, keyBase64Url := range body.Keys {
+		key, err := base64.URLEncoding.DecodeString(keyBase64Url)
+		if err != nil {
+			c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "some key is not in base64-url encoded format", "error": err.Error()})
+			return
+		}
 		if len(key) != 48 {
-			c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "key length is not 48 bytes", "error": fmt.Sprintf("key length is %v bytes", len(key))})
+			c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "some key length is not 48 bytes", "error": fmt.Sprintf("key length is %v bytes", len(key))})
 			return
 		}
 		// operation
@@ -70,7 +80,7 @@ func (n *Node) handleGetMessagesByKey(c *gin.Context) {
 			return
 		}
 		messages = append(messages, HTTPSchemaKeyMessage{
-			Key:     key,
+			Key:     keyBase64Url,
 			Content: resp.Content,
 		})
 	}
@@ -80,10 +90,10 @@ func (n *Node) handleGetMessagesByKey(c *gin.Context) {
 
 func (n *Node) handlePostMessage(c *gin.Context) {
 	// read path param
-	keyBase64 := c.Param("key")
-	key, err := base64.URLEncoding.DecodeString(keyBase64)
+	keyBase64Url := c.Param("key")
+	key, err := base64.URLEncoding.DecodeString(keyBase64Url)
 	if err != nil {
-		c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "key should be base64 encoded string", "error": err.Error(), "received_key": keyBase64})
+		c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "key should be base64 encoded string", "error": err.Error(), "received_key": keyBase64Url})
 		return
 	}
 	if len(key) != 48 {
@@ -283,8 +293,11 @@ func (n *Node) handleGetPublishJob(c *gin.Context) {
 	case TIMEOUT:
 		status = "timeout"
 	}
+
+	keyBase64Url := base64.URLEncoding.EncodeToString(job.Key)
+
 	c.IndentedJSON(http.StatusOK, HTTPSchemaPublishJob{
-		Key:     job.Key,
+		Key:     keyBase64Url,
 		Status:  status,
 		ViaPath: job.OnPath,
 	})

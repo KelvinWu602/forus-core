@@ -10,7 +10,7 @@ type HTTPPostMessageReq struct {
 }
 
 type HTTPPostMessagesReq struct {
-	Keys [][]byte `json:"keys"`
+	Keys []string `json:"keys"`
 }
 
 type HTTPPostMessageResp struct {
@@ -23,7 +23,7 @@ type HTTPPostPathReq struct {
 }
 
 type HTTPSchemaKeyMessage struct {
-	Key     []byte `json:"key"`
+	Key     string `json:"key"`
 	Content []byte `json:"content"`
 }
 
@@ -38,7 +38,7 @@ type HTTPSchemaCoverNode struct {
 }
 
 type HTTPSchemaPublishJob struct {
-	Key     []byte    `json:"message_key"`
+	Key     string    `json:"message_key"`
 	Status  string    `json:"status"`
 	ViaPath uuid.UUID `json:"via_path"`
 }
