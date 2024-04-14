@@ -29,7 +29,6 @@ func initConfigs(configFilePath string) *viper.Viper {
 	v.SetDefault("NUMBER_OF_COVER_NODES_FOR_PUBLISH", 2)
 	v.SetDefault("MOVE_UP_REQUIREMENT_FAILURE_THRESHOLD", 3)
 	// string
-	v.SetDefault("HTTP_SERVER_LISTEN_IP", "127.0.0.1")
 	v.SetDefault("HTTP_SERVER_LISTEN_PORT", ":3000")
 
 	v.SetDefault("IMMUTABLE_STORAGE_SERVER_LISTEN_IP", "127.0.0.1")
@@ -37,7 +36,8 @@ func initConfigs(configFilePath string) *viper.Viper {
 
 	v.SetDefault("NODE_DISCOVERY_SERVER_LISTEN_IP", "127.0.0.1")
 	v.SetDefault("NODE_DISCOVERY_SERVER_LISTEN_PORT", ":3200")
-
+	//bool
+	v.SetDefault("HTTP_SERVER_LISTEN_All", "false")
 	// config.yaml
 	// located at project root folder, same level as main.go
 	v.SetConfigFile(configFilePath)
@@ -64,7 +64,6 @@ func initConfigs(configFilePath string) *viper.Viper {
 	v.BindEnv("NUMBER_OF_COVER_NODES_FOR_PUBLISH")
 	v.BindEnv("MOVE_UP_REQUIREMENT_FAILURE_THRESHOLD")
 	// string
-	v.BindEnv("HTTP_SERVER_LISTEN_IP")
 	v.BindEnv("HTTP_SERVER_LISTEN_PORT")
 
 	v.BindEnv("IMMUTABLE_STORAGE_SERVER_LISTEN_IP")
@@ -72,5 +71,7 @@ func initConfigs(configFilePath string) *viper.Viper {
 
 	v.BindEnv("NODE_DISCOVERY_SERVER_LISTEN_IP")
 	v.BindEnv("NODE_DISCOVERY_SERVER_LISTEN_PORT")
+	// bool
+	v.BindEnv("HTTP_SERVER_LISTEN_ALL")
 	return v
 }

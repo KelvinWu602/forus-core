@@ -63,25 +63,25 @@ func (ic *ImmutableStorageClient) New(v *viper.Viper) error {
 }
 
 func (ic *ImmutableStorageClient) Store(key blueprint.Key, body []byte) (*isProtos.StoreResponse, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	return ic.client.Store(ctx, &isProtos.StoreRequest{Key: key[:], Content: body})
 }
 
 func (ic *ImmutableStorageClient) Read(key []byte) (*isProtos.ReadResponse, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	return ic.client.Read(ctx, &isProtos.ReadRequest{Key: key})
 }
 
 func (ic *ImmutableStorageClient) AvailableIDs() (*isProtos.AvailableKeysResponse, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	return ic.client.AvailableKeys(ctx, &isProtos.AvailableKeysRequest{})
 }
 
 func (ic *ImmutableStorageClient) IsDiscovered(key []byte) (*isProtos.IsDiscoveredResponse, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	return ic.client.IsDiscovered(ctx, &isProtos.IsDiscoveredRequest{Key: key})
 }

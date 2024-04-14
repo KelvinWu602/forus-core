@@ -133,8 +133,12 @@ func (n *Node) joinCluster() {
 func (n *Node) StartHTTP() {
 	// Start HTTP server for web client
 	// in production, should bind to only localhost, otherwise others may be able to retrieve sensitive information of this node
-
-	tcpAddr := n.v.GetString("HTTP_SERVER_LISTEN_IP") + n.v.GetString("HTTP_SERVER_LISTEN_PORT")
+	var tcpAddr string
+	if n.v.GetBool("HTTP_SERVER_LISTEN_All") {
+		tcpAddr = n.v.GetString("HTTP_SERVER_LISTEN_PORT")
+	} else {
+		tcpAddr = "127.0.0.1" + n.v.GetString("HTTP_SERVER_LISTEN_PORT")
+	}
 	logMsg(n.name, "StartHTTP", fmt.Sprintf("setting up HTTP server at %v", tcpAddr))
 	router := gin.Default()
 
