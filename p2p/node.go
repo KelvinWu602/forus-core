@@ -16,6 +16,7 @@ import (
 	"syscall"
 
 	is "github.com/KelvinWu602/immutable-storage/blueprint"
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/spf13/viper"
@@ -141,6 +142,8 @@ func (n *Node) StartHTTP() {
 	}
 	logMsg(n.name, "StartHTTP", fmt.Sprintf("setting up HTTP server at %v", tcpAddr))
 	router := gin.Default()
+
+	router.Use(cors.Default())
 
 	router.GET("/message/:key", n.handleGetMessage)
 	router.POST("/message/:key", n.handlePostMessage)
