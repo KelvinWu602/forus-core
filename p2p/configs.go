@@ -71,6 +71,7 @@ func initConfigs(configFilePath string) *viper.Viper {
 
 	v.BindEnv("NODE_DISCOVERY_SERVER_LISTEN_IP")
 	v.BindEnv("NODE_DISCOVERY_SERVER_LISTEN_PORT")
+	v.BindEnv("CLUSTER_CONTACT_NODE_IP")
 	// bool
 	v.BindEnv("HTTP_SERVER_LISTEN_ALL")
 	return v

@@ -390,7 +390,7 @@ func (n *Node) handleGetConfigs(c *gin.Context) {
 		"IMMUTABLE_STORAGE_SERVER_LISTEN_PORT": n.v.GetString("IMMUTABLE_STORAGE_SERVER_LISTEN_PORT"),
 		"CLUSTER_CONTACT_NODE_IP":              n.v.GetString("CLUSTER_CONTACT_NODE_IP"),
 		// bool
-		"TESTING_FLAG": n.v.GetBool("TESTING_FLAG"),
+		"HTTP_SERVER_LISTEN_ALL": n.v.GetBool("HTTP_SERVER_LISTEN_ALL"),
 	})
 }
 
