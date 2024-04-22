@@ -22,14 +22,14 @@ func checkCodec[T any](encode T, empty *T) error {
 
 func TestQueryPathReq(t *testing.T) {
 	dummy := QueryPathReq{
-		PublicKey: []byte{1, 2, 3},
+		CoverPublicKey: []byte{1, 2, 3},
 	}
 	empty := QueryPathReq{}
 	err := checkCodec(dummy, &empty)
 	if err != nil {
 		t.Fatalf("QueryPathReq codec error: %v\n", err)
 	}
-	if !slices.Equal(dummy.PublicKey, empty.PublicKey) {
+	if !slices.Equal(dummy.CoverPublicKey, empty.CoverPublicKey) {
 		t.Fatalf("QueryPathReq codec unmatch:\n%v\n%v", dummy, empty)
 	}
 	t.Logf("Should see same values: %v %v", dummy, empty)
@@ -64,7 +64,7 @@ func TestDHKeyExchange(t *testing.T) {
 func TestConnectPathReq(t *testing.T) {
 	dummy := ConnectPathReq{
 		EncryptedTreeUUID: []byte{1, 2, 3},
-		KeyExchange: DHKeyExchange{
+		CoverKeyExchange: DHKeyExchange{
 			G:       big.NewInt(2345675),
 			P:       big.NewInt(4565678789),
 			HalfKey: big.NewInt(765432356787654),
@@ -78,8 +78,8 @@ func TestConnectPathReq(t *testing.T) {
 	if !slices.Equal(dummy.EncryptedTreeUUID, empty.EncryptedTreeUUID) {
 		t.Fatalf("ConnectPathReq codec unmatch:\n%v\n%v", dummy, empty)
 	}
-	dKE := dummy.KeyExchange
-	eKE := empty.KeyExchange
+	dKE := dummy.CoverKeyExchange
+	eKE := empty.CoverKeyExchange
 	if dKE.G.Cmp(eKE.G) != 0 || dKE.P.Cmp(eKE.P) != 0 || dKE.HalfKey.Cmp(eKE.HalfKey) != 0 {
 		t.Fatalf("ConnectPathReq codec unmatch:\n%v\n%v", dummy, empty)
 	}
@@ -88,8 +88,8 @@ func TestConnectPathReq(t *testing.T) {
 
 func TestCreateProxyReq(t *testing.T) {
 	dummy := CreateProxyReq{
-		PublicKey: []byte{1, 2, 3},
-		KeyExchange: DHKeyExchange{
+		CoverPublicKey: []byte{1, 2, 3},
+		CoverKeyExchange: DHKeyExchange{
 			G:       big.NewInt(2345675),
 			P:       big.NewInt(4565678789),
 			HalfKey: big.NewInt(765432356787654),
@@ -100,11 +100,11 @@ func TestCreateProxyReq(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateProxyReq codec error: %v\n", err)
 	}
-	if !slices.Equal(dummy.PublicKey, empty.PublicKey) {
+	if !slices.Equal(dummy.CoverPublicKey, empty.CoverPublicKey) {
 		t.Fatalf("CreateProxyReq codec unmatch:\n%v\n%v", dummy, empty)
 	}
-	dKE := dummy.KeyExchange
-	eKE := empty.KeyExchange
+	dKE := dummy.CoverKeyExchange
+	eKE := empty.CoverKeyExchange
 	if dKE.G.Cmp(eKE.G) != 0 || dKE.P.Cmp(eKE.P) != 0 || dKE.HalfKey.Cmp(eKE.HalfKey) != 0 {
 		t.Fatalf("CreateProxyReq codec unmatch:\n%v\n%v", dummy, empty)
 	}
@@ -114,8 +114,8 @@ func TestCreateProxyReq(t *testing.T) {
 func TestPath(t *testing.T) {
 	dummy := Path{
 		EncryptedTreeUUID: []byte{1, 2, 3, 4},
-		NextHop:           "Dick",
-		NextNextHop:       "Shit",
+		NextHopIP:         "Dick",
+		NextNextHopIP:     "Shit",
 		ProxyPublicKey:    []byte{5, 6, 7, 8},
 	}
 	empty := Path{}
@@ -129,7 +129,7 @@ func TestPath(t *testing.T) {
 	if !slices.Equal(dummy.ProxyPublicKey, empty.ProxyPublicKey) {
 		t.Fatalf("Path codec unmatch:\n%v\n%v", dummy, empty)
 	}
-	if dummy.NextHop != empty.NextHop || dummy.NextNextHop != empty.NextNextHop {
+	if dummy.NextHopIP != empty.NextHopIP || dummy.NextNextHopIP != empty.NextNextHopIP {
 		t.Fatalf("Path codec unmatch:\n%v\n%v", dummy, empty)
 	}
 	t.Logf("Should see same values: %v %v", dummy, empty)
@@ -137,12 +137,12 @@ func TestPath(t *testing.T) {
 
 func TestQueryPathResp(t *testing.T) {
 	dummy := QueryPathResp{
-		NodePublicKey: []byte{1, 2, 3, 4},
+		ParentPublicKey: []byte{1, 2, 3, 4},
 		Paths: []Path{
 			{
 				EncryptedTreeUUID: []byte{1, 2, 3, 4},
-				NextHop:           "Dick",
-				NextNextHop:       "Shit",
+				NextHopIP:         "Dick",
+				NextNextHopIP:     "Shit",
 				ProxyPublicKey:    []byte{5, 6, 7, 8},
 			},
 		},
@@ -152,7 +152,7 @@ func TestQueryPathResp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("QueryPathResp codec error: %v\n", err)
 	}
-	if !slices.Equal(dummy.NodePublicKey, empty.NodePublicKey) {
+	if !slices.Equal(dummy.ParentPublicKey, empty.ParentPublicKey) {
 		t.Fatalf("QueryPathResp codec unmatch:\n%v\n%v", dummy, empty)
 	}
 	dP := dummy.Paths[0]
@@ -164,7 +164,7 @@ func TestQueryPathResp(t *testing.T) {
 	if !slices.Equal(dP.ProxyPublicKey, eP.ProxyPublicKey) {
 		t.Fatalf("QueryPathResp codec unmatch:\n%v\n%v", dummy, empty)
 	}
-	if dP.NextHop != eP.NextHop || dP.NextNextHop != eP.NextNextHop {
+	if dP.NextHopIP != eP.NextHopIP || dP.NextNextHopIP != eP.NextNextHopIP {
 		t.Fatalf("QueryPathResp codec unmatch:\n%v\n%v", dummy, empty)
 	}
 	t.Logf("Should see same values: %v %v", dummy, empty)
@@ -172,14 +172,14 @@ func TestQueryPathResp(t *testing.T) {
 
 func TestVerifyCoverReq(t *testing.T) {
 	dummy := VerifyCoverReq{
-		NextHop: "123",
+		NextHopIP: "123",
 	}
 	empty := VerifyCoverReq{}
 	err := checkCodec(dummy, &empty)
 	if err != nil {
 		t.Fatalf("VerifyCoverReq codec error: %v\n", err)
 	}
-	if dummy.NextHop != empty.NextHop {
+	if dummy.NextHopIP != empty.NextHopIP {
 		t.Fatalf("VerifyCoverReq codec unmatch:\n%v\n%v", dummy, empty)
 	}
 	t.Logf("Should see same values: %v %v", dummy, empty)
@@ -202,8 +202,8 @@ func TestVerifyCoverResp(t *testing.T) {
 
 func TestConnectPathResp(t *testing.T) {
 	dummy := ConnectPathResp{
-		Status: true,
-		KeyExchange: DHKeyExchange{
+		Accepted: true,
+		ParentKeyExchange: DHKeyExchange{
 			G:       big.NewInt(2345675),
 			P:       big.NewInt(4565678789),
 			HalfKey: big.NewInt(765432356787654),
@@ -214,11 +214,11 @@ func TestConnectPathResp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ConnectPathResp codec error: %v\n", err)
 	}
-	if dummy.Status != empty.Status {
+	if dummy.Accepted != empty.Accepted {
 		t.Fatalf("ConnectPathResp codec unmatch:\n%v\n%v", dummy, empty)
 	}
-	dKE := dummy.KeyExchange
-	eKE := empty.KeyExchange
+	dKE := dummy.ParentKeyExchange
+	eKE := empty.ParentKeyExchange
 	if dKE.G.Cmp(eKE.G) != 0 || dKE.P.Cmp(eKE.P) != 0 || dKE.HalfKey.Cmp(eKE.HalfKey) != 0 {
 		t.Fatalf("ConnectPathResp codec unmatch:\n%v\n%v", dummy, empty)
 	}
@@ -227,13 +227,13 @@ func TestConnectPathResp(t *testing.T) {
 
 func TestCreateProxyResp(t *testing.T) {
 	dummy := CreateProxyResp{
-		Status: true,
-		KeyExchange: DHKeyExchange{
+		Accepted: true,
+		ProxyKeyExchange: DHKeyExchange{
 			G:       big.NewInt(2345675),
 			P:       big.NewInt(4565678789),
 			HalfKey: big.NewInt(765432356787654),
 		},
-		Public:            []byte{1, 2, 3},
+		ProxyPublicKey:    []byte{1, 2, 3},
 		EncryptedTreeUUID: []byte{1, 2, 3},
 	}
 	empty := CreateProxyResp{}
@@ -241,14 +241,14 @@ func TestCreateProxyResp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateProxyResp codec error: %v\n", err)
 	}
-	if dummy.Status != empty.Status {
+	if dummy.Accepted != empty.Accepted {
 		t.Fatalf("CreateProxyResp codec unmatch:\n%v\n%v", dummy, empty)
 	}
-	if !slices.Equal(dummy.Public, empty.Public) || !slices.Equal(dummy.EncryptedTreeUUID, empty.EncryptedTreeUUID) {
+	if !slices.Equal(dummy.ProxyPublicKey, empty.ProxyPublicKey) || !slices.Equal(dummy.EncryptedTreeUUID, empty.EncryptedTreeUUID) {
 		t.Fatalf("CreateProxyResp codec unmatch:\n%v\n%v", dummy, empty)
 	}
-	dKE := dummy.KeyExchange
-	eKE := empty.KeyExchange
+	dKE := dummy.ProxyKeyExchange
+	eKE := empty.ProxyKeyExchange
 	if dKE.G.Cmp(eKE.G) != 0 || dKE.P.Cmp(eKE.P) != 0 || dKE.HalfKey.Cmp(eKE.HalfKey) != 0 {
 		t.Fatalf("CreateProxyResp codec unmatch:\n%v\n%v", dummy, empty)
 	}
@@ -257,13 +257,13 @@ func TestCreateProxyResp(t *testing.T) {
 
 func TestProtocolMessage(t *testing.T) {
 	dummy := CreateProxyResp{
-		Status: true,
-		KeyExchange: DHKeyExchange{
+		Accepted: true,
+		ProxyKeyExchange: DHKeyExchange{
 			G:       big.NewInt(2345675),
 			P:       big.NewInt(4565678789),
 			HalfKey: big.NewInt(765432356787654),
 		},
-		Public:            []byte{1, 2, 3},
+		ProxyPublicKey:    []byte{1, 2, 3},
 		EncryptedTreeUUID: []byte{1, 2, 3},
 	}
 
@@ -293,14 +293,14 @@ func TestProtocolMessage(t *testing.T) {
 	if gob.NewDecoder(bytes.NewBuffer(dummyP.Content)).Decode(&empty) != nil {
 		t.Fatalf("failed cast emptyP.Content back to CreateProxyResp object:\n%v\n%v\n", dummyP, emptyP)
 	}
-	if dummy.Status != empty.Status {
+	if dummy.Accepted != empty.Accepted {
 		t.Fatalf("CreateProxyResp codec unmatch:\n%v\n%v", dummy, empty)
 	}
-	if !slices.Equal(dummy.Public, empty.Public) || !slices.Equal(dummy.EncryptedTreeUUID, empty.EncryptedTreeUUID) {
+	if !slices.Equal(dummy.ProxyPublicKey, empty.ProxyPublicKey) || !slices.Equal(dummy.EncryptedTreeUUID, empty.EncryptedTreeUUID) {
 		t.Fatalf("CreateProxyResp codec unmatch:\n%v\n%v", dummy, empty)
 	}
-	dKE := dummy.KeyExchange
-	eKE := empty.KeyExchange
+	dKE := dummy.ProxyKeyExchange
+	eKE := empty.ProxyKeyExchange
 	if dKE.G.Cmp(eKE.G) != 0 || dKE.P.Cmp(eKE.P) != 0 || dKE.HalfKey.Cmp(eKE.HalfKey) != 0 {
 		t.Fatalf("CreateProxyResp codec unmatch:\n%v\n%v", dummy, empty)
 	}

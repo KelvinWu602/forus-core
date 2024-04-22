@@ -114,15 +114,14 @@ func TestSymmetricEncrypt(t *testing.T) {
 func TestEncryptUUID(t *testing.T) {
 	pub, priv, _ := GenerateAsymmetricKeyPair()
 	plain := uuid.New()
-
 	cipher, err := EncryptUUID(plain, pub)
 	if err != nil {
-		t.Fatalf("%v", err)
+		t.Fatalf("error when encrypting: %v", err)
 	}
 
 	decipher, err := DecryptUUID(cipher, priv)
 	if err != nil {
-		t.Fatalf("%v", err)
+		t.Fatalf("error when decrypting: %v", err)
 	}
 
 	if !bytes.Equal(plain[:], decipher[:]) {

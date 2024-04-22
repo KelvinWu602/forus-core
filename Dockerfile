@@ -1,4 +1,4 @@
-FROM golang:1.21
+FROM golang:1.20
 
 WORKDIR /forus-core
 COPY go.mod go.sum ./

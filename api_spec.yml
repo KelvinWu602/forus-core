@@ -9,13 +9,13 @@ schemes:
 paths:
   /message/{key}:
     get:
-      summary: Returns the byte array of a published message content by base64 encoded key string
+      summary: Returns the byte array of a published message content by base64-url encoded key string
       parameters:
 	      - in: path
 		      name: key
 		      required: true
 		      type: string
-		      description: message key in base64 encoded string format
+		      description: message key in base64-url encoded string format
       responses:
         200:
           description: OK
@@ -30,12 +30,12 @@ paths:
 		      name: key
 		      required: true
 		      type: string
-		      description: message key in base64 encoded string format
+		      description: message key in base64-url encoded string format
 		    - in: body
 		      name: content
 		      required: true
 		      type: string
-		      description: message content in base64 encoded string format
+		      description: message content in base64-std encoded string format
 		    - in: body
 			    name: path_id
 				  required: false
@@ -50,6 +50,43 @@ paths:
 		          publish_job_id:
 			          type: string
 			          description: publish job uuid
+  /messages:
+    post:
+      summary: Returns an array of messages key and content pairs
+      parameters:
+        - in: body
+          name: keys
+          required: true
+          description: An array of message keys in base64-url encoded format
+          schema:
+            type: array
+            items:
+              type: string
+      response:
+        200:
+          description: OK
+          schema:
+            type: array
+            items: 
+              schema:
+                type: object
+                properties:
+                  key:
+                    type: string
+                    description: the message key in base64-url encoded format
+                  content:
+                    type: string
+                    description: the message content with key header removed, in base64-std encoded format
+  /message-keys:
+    get:
+      responses:
+        200:
+          description: OK
+          schema:
+            type: array
+            items:
+              type: string
+              description:  message key in base64-url encoded string format
   /path/{id}:
     get:
       summary: Returns an opened paths on this node
@@ -144,7 +181,7 @@ paths:
             $ref: '#/components/schemas/CoverNode'                        
 			  404:
           description: Not Found
-  /cover:
+  /covers:
     get:
       summary: Returns all cover node profile by cover node ip
       responses:
@@ -166,10 +203,27 @@ paths:
               properties:
                 public_key:
                   type: string
-                  description: base64 encoded public key
+                  description: base64-std encoded public key
                 private_key:
                   type: string
-                  description: base64 encoded private key
+                  description: base64-std encoded private key
+  /publish-condition:
+    get:
+      summary: Returns the current fulfillment status of the node
+      responses:
+        200:
+          description: OK
+          schema:
+            type: object
+            properties:
+              status:
+                type: boolean
+              no_of_covers:
+                type: number
+              no_of_paths:
+                type: number
+              NUMBER_OF_COVER_NODES_FOR_PUBLISH:
+                type: number
 components:
   schemas:
     CoverNode:
@@ -177,7 +231,7 @@ components:
       properties:
         symmetric_key:
           type: string
-          description: symmetric key shared with the cover node in base64 encoding
+          description: symmetric key shared with the cover node in base64-std encoding
         connected_path_id:
           type: string
           description: path uuid that the cover node is currently connected to via you
@@ -186,13 +240,13 @@ components:
       properties:
         content:
           type: string
-          description: message content in base64 encoded string format
+          description: message content in base64-std encoded string format
     PublishJob:
       type: object
       properties:
         message_key:
           type: string
-          description: the base64 encoded key of the published message
+          description: the base64-url encoded key of the published message
         status:
           type: string
           enum: [pending, success, timeout]
@@ -211,10 +265,10 @@ components:
           type: string
         proxy_public_key:
           type: string
-          description: proxy node public key in base64 encoding
+          description: proxy node public key in base64-std encoding
         symmetric_key:
           type: string
-          description: symmetric key shared with next-hop node in base64 encoding
+          description: symmetric key shared with next-hop node in base64-std encoding
         analytics:
           type: object
           properties:

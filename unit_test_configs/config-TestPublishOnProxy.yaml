@@ -18,7 +18,7 @@ MOVE_UP_REQUIREMENT_FAILURE_THRESHOLD: 3
 # Controls where the HTTP server will listen on
 # To Bind all IP, set HTTP_SERVER_LISTEN_IP as ""
 # PS, in general it is not recommended to do so, as other network participants are not supposed to have access on your HTTP server.
-HTTP_SERVER_LISTEN_ALL: false
+HTTP_SERVER_LISTEN_IP: "127.0.0.1"
 HTTP_SERVER_LISTEN_PORT: ":3000"
 
 # Point to the address that the Immutable Storage gRPC Server is running

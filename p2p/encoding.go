@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/gob"
+	"errors"
+	"fmt"
 	"math/big"
 )
 
-// TODO: use the correct type in input
 func NewCoverMessage(proxyPublicKey []byte, symmetricKey big.Int) (*ApplicationMessage, error) {
+	logMsg2("NewCoverMessage", fmt.Sprintf("create cover message with proxy key = %v, symmetric key = %v", proxyPublicKey, symmetricKey))
 	key := [48]byte{}
 	rand.Read(key[:])
 	content := [1024]byte{}
@@ -47,28 +49,34 @@ func NewCoverMessage(proxyPublicKey []byte, symmetricKey big.Int) (*ApplicationM
 }
 
 func NewRealMessage(dm DataMessage, proxyPublicKey []byte, symmetricKey big.Int) (*ApplicationMessage, error) {
+	logMsg2("NewRealMessage", fmt.Sprintf("dm = %v\nproxyPublicKey = %v\nsymmetricKey = %v\n", dm, proxyPublicKey, symmetricKey))
 	asymInput, err := dm.CreateAsymmetricEncryptionInput()
 	if err != nil {
+		logError2("NewRealMessage", err, "dm.CreateAsymmetricEncryptionInput()")
 		return nil, err
 	}
 	asymInputBytes, err := asymInput.ToBytes()
 	if err != nil {
+		logError2("NewRealMessage", err, "asymInput.ToBytes()")
 		return nil, err
 	}
 	asymOutput, err := AsymmetricEncrypt(asymInputBytes, proxyPublicKey)
 	if err != nil {
+		logError2("NewRealMessage", err, "AsymmetricEncrypt(asymInputBytes, proxyPublicKey)")
 		return nil, err
 	}
 	symInput := SymmetricEncryptDataMessage{
-		Type:                      Cover,
+		Type:                      Real,
 		AsymetricEncryptedPayload: asymOutput,
 	}
 	symInputBytes, err := symInput.ToBytes()
 	if err != nil {
+		// logError2("NewRealMessage", err, "symInput.ToBytes()")
 		return nil, err
 	}
 	symOutput, err := SymmetricEncrypt(symInputBytes, symmetricKey)
 	if err != nil {
+		logError2("NewRealMessage", err, "SymmetricEncrypt(symInputBytes, symmetricKey)")
 		return nil, err
 	}
 
@@ -92,18 +100,20 @@ func (msg *DataMessage) CreateAsymmetricEncryptionInput() (*AsymetricEncryptData
 }
 
 func (msg *AsymetricEncryptDataMessage) ToBytes() ([]byte, error) {
-	buffer := bytes.Buffer{}
-	encoder := gob.NewEncoder(&buffer)
-	if err := encoder.Encode(msg); err != nil {
-		return nil, err
-	}
-	return buffer.Bytes(), nil
+	return gobEncodeToBytes(msg)
 }
 
 func (msg *SymmetricEncryptDataMessage) ToBytes() ([]byte, error) {
-	buffer := bytes.Buffer{}
-	encoder := gob.NewEncoder(&buffer)
-	if err := encoder.Encode(msg); err != nil {
+	return gobEncodeToBytes(msg)
+}
+
+var errGobEncodeMsg = errors.New("failed to encode message using gob")
+
+func gobEncodeToBytes[T any](req T) ([]byte, error) {
+	buffer := bytes.NewBuffer([]byte{})
+	err := gob.NewEncoder(buffer).Encode(req)
+	if err != nil {
+		logError2("gobEncodeToBytes", err, fmt.Sprintf("input = %v\n", req))
 		return nil, err
 	}
 	return buffer.Bytes(), nil

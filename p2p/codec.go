@@ -59,9 +59,10 @@ func AsymmetricDecrypt(input []byte, privInBytes []byte) ([]byte, error) {
 	}
 
 	decrypted, err := priv.Decrypt(input)
-	if err.Error() == "Invalid MAC" {
-		return nil, errWrongPrivateKey
-	} else if err != nil {
+	if err != nil {
+		if err.Error() == "Invalid MAC" {
+			return nil, errWrongPrivateKey
+		}
 		return nil, err
 	}
 

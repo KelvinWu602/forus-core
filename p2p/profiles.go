@@ -1,6 +1,7 @@
 package p2p
 
 import (
+	"context"
 	"math/big"
 
 	"github.com/google/uuid"
@@ -16,11 +17,13 @@ type PathProfile struct {
 	symKey       big.Int
 	successCount int
 	failureCount int
+	cancelFunc   context.CancelCauseFunc //for terminating the handleApplicationMessageWorker dedicated to a cover node
 }
 
 // contains communication info for all cover nodes of the particular node.
 type CoverNodeProfile struct {
-	cover     string // IP address of the cover node
-	secretKey big.Int
-	treeUUID  uuid.UUID
+	cover      string // IP address of the cover node
+	secretKey  big.Int
+	treeUUID   uuid.UUID
+	cancelFunc context.CancelCauseFunc //for terminating the handleApplicationMessageWorker dedicated to a cover node
 }

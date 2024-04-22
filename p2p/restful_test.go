@@ -2,10 +2,14 @@ package p2p
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -39,8 +43,62 @@ const jsonHTTPSchemaPath = `{
 var byteArrayJsonStringPlaceholder = "ZYAz6TMbgmmoa5m4xFcLbLd/rQN25gknFrrdkpbxe3PxB7wJAjZPvj4bRD8kZ+WZ"
 var byteArrayPlaceholder = []byte{101, 128, 51, 233, 51, 27, 130, 105, 168, 107, 153, 184, 196, 87, 11, 108, 183, 127, 173, 3, 118, 230, 9, 39, 22, 186, 221, 146, 150, 241, 123, 115, 241, 7, 188, 9, 2, 54, 79, 190, 62, 27, 68, 63, 36, 103, 229, 153}
 
-var uuidJsonStringPlaceholder = "c9ae5378-59ff-4dfd-a247-6031fe694e02"
+// var uuidJsonStringPlaceholder = "c9ae5378-59ff-4dfd-a247-6031fe694e02"
 var uuidPlaceholder = uuid.MustParse("c9ae5378-59ff-4dfd-a247-6031fe694e02")
+
+func TestBase64Encoding(t *testing.T) {
+	assert := assert.New(t)
+	// json encoder is StdEncoded
+	jsonBuffer := bytes.NewBuffer([]byte{})
+	jsonEncoder := json.NewEncoder(jsonBuffer)
+	err := jsonEncoder.Encode(byteArrayPlaceholder)
+	assert.Equal(nil, err, "should be nil")
+
+	t.Logf("json encoded byte string: %v\n", jsonBuffer.String())
+
+	// with string "
+	jsonDecoder := json.NewDecoder(jsonBuffer)
+	var jsonDecodedString string
+
+	err = jsonDecoder.Decode(&jsonDecodedString)
+	assert.Equal(nil, err, "should be nil")
+
+	assert.Equal(byteArrayJsonStringPlaceholder, jsonDecodedString, "should be equal")
+
+	key, err := base64.StdEncoding.DecodeString(jsonDecodedString)
+	assert.Equal(nil, err, "should be nil")
+	assert.Equal(byteArrayPlaceholder, key, "should be equal")
+}
+
+func TestHTTPDecode(t *testing.T) {
+	done := make(chan bool)
+	go func() {
+		router := gin.Default()
+		router.GET("/message/:key", func(ctx *gin.Context) {
+			keyBase64 := ctx.Param("key")
+			_, err := base64.URLEncoding.DecodeString(keyBase64)
+			if err != nil {
+				t.Log(keyBase64)
+				ctx.Status(http.StatusBadRequest)
+				return
+			}
+			ctx.Status(http.StatusOK)
+		})
+
+		go router.Run("localhost:8080")
+
+		<-done
+	}()
+
+	time.Sleep(time.Second)
+	resp, err := http.Get("http://localhost:8080/message/9jZfMjv_yZnahjoX8zj5qTUwRnC4RFjk5lsxbQSgL8mu1nKDd28tViBVH1nxRvtY")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatal("Received wrong status code")
+	}
+}
 
 func TestHTTPPostMessageReqWithoutPathId(t *testing.T) {
 	decoder := json.NewDecoder(strings.NewReader(jsonPostMessageReqWithoutPathId))
@@ -88,11 +146,11 @@ func TestHTTPPostPathReqEmpty(t *testing.T) {
 
 func TestHTTPSchemaMessage(t *testing.T) {
 	buffer := bytes.NewBuffer([]byte{})
-	decoder := json.NewEncoder(buffer)
+	encoder := json.NewEncoder(buffer)
 	message := HTTPSchemaMessage{
 		Content: byteArrayPlaceholder,
 	}
-	err := decoder.Encode(&message)
+	err := encoder.Encode(&message)
 	require.Equal(t, nil, err)
 	// check validness
 	encoded := buffer.String()

@@ -18,15 +18,15 @@ MOVE_UP_REQUIREMENT_FAILURE_THRESHOLD: 3
 # Controls where the HTTP server will listen on
 # To Bind all IP, set HTTP_SERVER_LISTEN_IP as ""
 # PS, in general it is not recommended to do so, as other network participants are not supposed to have access on your HTTP server.
-HTTP_SERVER_LISTEN_ALL: false
+HTTP_SERVER_LISTEN_IP: "127.0.0.3"
 HTTP_SERVER_LISTEN_PORT: ":3000"
 
 # Point to the address that the Immutable Storage gRPC Server is running
-IMMUTABLE_STORAGE_SERVER_LISTEN_IP: "127.0.0.1"
+IMMUTABLE_STORAGE_SERVER_LISTEN_IP: "127.0.0.3"
 IMMUTABLE_STORAGE_SERVER_LISTEN_PORT: ":3100"
 
 # Point to the address that the Node Discovery gRPC Server is running
-NODE_DISCOVERY_SERVER_LISTEN_IP: "127.0.0.1"
+NODE_DISCOVERY_SERVER_LISTEN_IP: "127.0.0.3"
 NODE_DISCOVERY_SERVER_LISTEN_PORT: ":3200"
 
 # Uncomment it when you wish the node to join cluster at this contact node during initialization
@@ -36,4 +36,5 @@ NODE_DISCOVERY_SERVER_LISTEN_PORT: ":3200"
 
 # TCP Server by default should bind to all IP 
 # Defining TESTING_TCP_SERVER_LISTEN_IP may cause it to be undiscoverable by other nodes on the internet
-# TESTING_TCP_SERVER_LISTEN_IP: "127.0.0.1"
+TESTING_TCP_SERVER_LISTEN_IP: "127.0.0.3"
+NODE_ALIAS: N3

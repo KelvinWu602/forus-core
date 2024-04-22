@@ -1,71 +1,78 @@
 package p2p
 
 import (
+	"log"
 	"time"
 
 	"github.com/spf13/viper"
 )
 
-func initConfigs() {
+// relative to project root
+func initConfigs(configFilePath string) *viper.Viper {
 	// Environment variables > config.yaml > default values
-
+	v := viper.New()
 	// defaults
 	// time
-	viper.SetDefault("COVER_MESSAGE_SENDING_INTERVAL", 10*time.Second)
-	viper.SetDefault("APPLICATION_MESSAGE_RECEIVING_INTERVAL", 15*time.Second)
-	viper.SetDefault("PUBLISH_JOB_FAILED_TIMEOUT", 10*time.Minute)
-	viper.SetDefault("PUBLISH_JOB_CHECKING_INTERVAL", 30*time.Second)
-	viper.SetDefault("TCP_REQUEST_TIMEOUT", 10*time.Second)
-	viper.SetDefault("MAINTAIN_PATHS_HEALTH_CHECKING_INTERVAL", 1*time.Minute)
-	viper.SetDefault("PUBLISH_CONDITION_CHECKING_INTERVAL", 1*time.Minute)
-	viper.SetDefault("FULFILL_PUBLISH_CONDITION_TIMEOUT", 5*time.Minute)
+	v.SetDefault("COVER_MESSAGE_SENDING_INTERVAL", 10*time.Second)
+	v.SetDefault("APPLICATION_MESSAGE_RECEIVING_INTERVAL", 15*time.Second)
+	v.SetDefault("PUBLISH_JOB_FAILED_TIMEOUT", 10*time.Minute)
+	v.SetDefault("PUBLISH_JOB_CHECKING_INTERVAL", 30*time.Second)
+	v.SetDefault("TCP_REQUEST_TIMEOUT", 10*time.Second)
+	v.SetDefault("MAINTAIN_PATHS_HEALTH_CHECKING_INTERVAL", 1*time.Minute)
+	v.SetDefault("PUBLISH_CONDITION_CHECKING_INTERVAL", 1*time.Minute)
+	v.SetDefault("FULFILL_PUBLISH_CONDITION_TIMEOUT", 5*time.Minute)
+	v.SetDefault("FULFILL_PUBLISH_CONDITION_INTERVAL", 10*time.Second)
 	// int
-	viper.SetDefault("HALF_OPEN_PATH_BUFFER_SIZE", 10000)
-	viper.SetDefault("TARGET_NUMBER_OF_CONNECTED_PATHS", 3)
-	viper.SetDefault("MAXIMUM_NUMBER_OF_COVER_NODES", 15)
-	viper.SetDefault("NUMBER_OF_COVER_NODES_FOR_PUBLISH", 2)
-	viper.SetDefault("MOVE_UP_REQUIREMENT_FAILURE_THRESHOLD", 3)
+	v.SetDefault("HALF_OPEN_PATH_BUFFER_SIZE", 5000)
+	v.SetDefault("TARGET_NUMBER_OF_CONNECTED_PATHS", 1)
+	v.SetDefault("MAXIMUM_NUMBER_OF_COVER_NODES", 15)
+	v.SetDefault("NUMBER_OF_COVER_NODES_FOR_PUBLISH", 2)
+	v.SetDefault("MOVE_UP_REQUIREMENT_FAILURE_THRESHOLD", 3)
 	// string
-	viper.SetDefault("TCP_SERVER_LISTEN_PORT", ":3001")
-	viper.SetDefault("HTTP_SERVER_LISTEN_PORT", ":3000")
-	viper.SetDefault("NODE_DISCOVERY_SERVER_LISTEN_PORT", ":3200")
-	viper.SetDefault("IMMUTABLE_STORAGE_SERVER_LISTEN_PORT", ":3100")
-	// bool
-	viper.SetDefault("TESTING_FLAG", false)
+	v.SetDefault("HTTP_SERVER_LISTEN_PORT", ":3000")
 
+	v.SetDefault("IMMUTABLE_STORAGE_SERVER_LISTEN_IP", "127.0.0.1")
+	v.SetDefault("IMMUTABLE_STORAGE_SERVER_LISTEN_PORT", ":3100")
+
+	v.SetDefault("NODE_DISCOVERY_SERVER_LISTEN_IP", "127.0.0.1")
+	v.SetDefault("NODE_DISCOVERY_SERVER_LISTEN_PORT", ":3200")
+	//bool
+	v.SetDefault("HTTP_SERVER_LISTEN_All", "false")
 	// config.yaml
-	viper.SetConfigFile("../config.yaml")
-	viper.SetConfigName("config")
-	viper.SetConfigType("yaml")
-	viper.AddConfigPath("..")
-	err := viper.ReadInConfig()
+	// located at project root folder, same level as main.go
+	v.SetConfigFile(configFilePath)
+	err := v.ReadInConfig()
 	if err != nil {
-		logError("initConfigs", err, "failed to load config.yaml, use default configs")
+		log.Println("Error when initConfigs", err, "failed to load config.yaml, using default configs")
 	}
 
 	// environment variable override
 	// time
-	viper.BindEnv("COVER_MESSAGE_SENDING_INTERVAL")
-	viper.BindEnv("APPLICATION_MESSAGE_RECEIVING_INTERVAL")
-	viper.BindEnv("PUBLISH_JOB_FAILED_TIMEOUT")
-	viper.BindEnv("PUBLISH_JOB_CHECKING_INTERVAL")
-	viper.BindEnv("TCP_REQUEST_TIMEOUT")
-	viper.BindEnv("MAINTAIN_PATHS_HEALTH_CHECKING_INTERVAL")
-	viper.BindEnv("PUBLISH_CONDITION_CHECKING_INTERVAL")
-	viper.BindEnv("FULFILL_PUBLISH_CONDITION_TIMEOUT")
+	v.BindEnv("COVER_MESSAGE_SENDING_INTERVAL")
+	v.BindEnv("APPLICATION_MESSAGE_RECEIVING_INTERVAL")
+	v.BindEnv("PUBLISH_JOB_FAILED_TIMEOUT")
+	v.BindEnv("PUBLISH_JOB_CHECKING_INTERVAL")
+	v.BindEnv("TCP_REQUEST_TIMEOUT")
+	v.BindEnv("MAINTAIN_PATHS_HEALTH_CHECKING_INTERVAL")
+	v.BindEnv("PUBLISH_CONDITION_CHECKING_INTERVAL")
+	v.BindEnv("FULFILL_PUBLISH_CONDITION_TIMEOUT")
+	v.BindEnv("FULFILL_PUBLISH_CONDITION_INTERVAL")
 	// int
-	viper.BindEnv("HALF_OPEN_PATH_BUFFER_SIZE")
-	viper.BindEnv("TARGET_NUMBER_OF_CONNECTED_PATHS")
-	viper.BindEnv("MAXIMUM_NUMBER_OF_COVER_NODES")
-	viper.BindEnv("NUMBER_OF_COVER_NODES_FOR_PUBLISH")
-	viper.BindEnv("MOVE_UP_REQUIREMENT_FAILURE_THRESHOLD")
+	v.BindEnv("HALF_OPEN_PATH_BUFFER_SIZE")
+	v.BindEnv("TARGET_NUMBER_OF_CONNECTED_PATHS")
+	v.BindEnv("MAXIMUM_NUMBER_OF_COVER_NODES")
+	v.BindEnv("NUMBER_OF_COVER_NODES_FOR_PUBLISH")
+	v.BindEnv("MOVE_UP_REQUIREMENT_FAILURE_THRESHOLD")
 	// string
-	viper.BindEnv("TCP_SERVER_LISTEN_PORT")
-	viper.BindEnv("HTTP_SERVER_LISTEN_PORT")
-	viper.BindEnv("NODE_DISCOVERY_SERVER_LISTEN_PORT")
-	viper.BindEnv("IMMUTABLE_STORAGE_SERVER_LISTEN_PORT")
-	viper.BindEnv("IMMUTABLE_STORAGE_SERVER_LISTEN_PORT")
-	viper.BindEnv("CLUSTER_CONTACT_NODE_IP")
+	v.BindEnv("HTTP_SERVER_LISTEN_PORT")
+
+	v.BindEnv("IMMUTABLE_STORAGE_SERVER_LISTEN_IP")
+	v.BindEnv("IMMUTABLE_STORAGE_SERVER_LISTEN_PORT")
+
+	v.BindEnv("NODE_DISCOVERY_SERVER_LISTEN_IP")
+	v.BindEnv("NODE_DISCOVERY_SERVER_LISTEN_PORT")
+	v.BindEnv("CLUSTER_CONTACT_NODE_IP")
 	// bool
-	viper.BindEnv("TESTING_FLAG")
+	v.BindEnv("HTTP_SERVER_LISTEN_ALL")
+	return v
 }
